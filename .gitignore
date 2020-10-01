@@ -1,0 +1,6 @@
+data/sample_submission.csv
+data/test_features.csv
+data/train_features.csv
+data/train_targets_nonscored.csv
+data/train_targets_scored.csv
+moa_env/
