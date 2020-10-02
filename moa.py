@@ -17,27 +17,29 @@ data_folder = "data/"
 #c-	                cell viability data
 #g-	                gene expression data
 
-
+#%%
 #------------------------ Preprocessing of Data ------------------------#
 #Get X and y data
-X_load = pd.read_csv(data_folder + "train_features.csv")
-y_load = pd.read_csv(data_folder + "train_targets_scored.csv")
-print("X, y shape before id remove: ", X_load.shape, y_load.shape)
+X = pd.read_csv(data_folder + "train_features.csv")
+y = pd.read_csv(data_folder + "train_targets_scored.csv")
+print("X, y shape before id remove: ", X.shape, y.shape)
+#%%
+sns.displot(y.sum(axis=1))
+print(y.sum(axis=1).value_counts().sort_index(axis=0))
+print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
+#%%
 
+
+#%%
 #Subset dataframe sig_id from dataframe
-X_load = X_load.iloc[:, 1:]
-y_load = y_load.iloc[:, 1:]
-print("X, y shape after id remove: " ,X_load.shape, y_load.shape)
+X = X.iloc[:, 1:]
+y = y.iloc[:, 1:]
+print("X, y shape after id remove: " ,X.shape, y.shape)
 
-#Subset X and y so only cp_type ==  trt_cp (treatment) lines are in the dataset
-filt_cp_type = X_load['cp_type'] == "trt_cp"
-X = X_load[filt_cp_type]
-y = y_load[filt_cp_type]
-print("X, y shape after control group removal: " ,X.shape, y.shape)
-
-#Encode treatment duration (cp_time), dosing (cp_dose)
+#Encode treatment duration (cp_time), dosing (cp_dose), sampel type (cp_type)
 enc_time_df = pd.get_dummies(X['cp_time'])
 enc_dose_df = pd.get_dummies(X['cp_dose'])
+enc_type_df = pd.get_dummies(X['cp_type'])
 X = X.drop(["cp_time", "cp_dose", "cp_type"], axis=1)
 
 #Normalize cell and gene columns between 0 and 1
@@ -45,32 +47,25 @@ X=(X-X.min())/(X.max()-X.min())
 print("Min/Max per column of X --> Confirming that cell and gene columns are normalized")
 print(pd.concat([X.min(),X.max()],axis=1))
 
-X = pd.concat([enc_dose_df, enc_time_df, X],axis=1)
+X = pd.concat([enc_dose_df, enc_time_df, enc_type_df, X],axis=1)
 print("X shape after encoding and dropping: " , X.shape)
 print("X column names after encoding ", X.columns)
-#%%
+
 #------------------------ Exporatory Data Analysis ------------------------#
-#Count how many rows have 0 targets as predictions
-def count_no_target(target_matrix):
-    no_target = 0
-    for i in range(0, target_matrix.shape[0]):
-        #If unique array == 1 only 0 is found in row so no target
-        if len(np.unique(np.array(target_matrix.iloc[i, :]))) == 1:
-            no_target += 1
-    return no_target
 
-#39% and 34% of rows should predict 0
-print("Rows with no target pre-control group removal: ", count_no_target(y_load)/len(y_load))
-print("Rows with no target post-control group removal: ", count_no_target(y)/len(y))
+#Creates a variable that encodes no target prediction
+y_binary = (y_load.sum(axis=1) == 0).astype(int)
+print("y shape before y_binary concat ", y.shape)
+y = pd.concat([y, y_binary], axis=1)
+print("y shape after y_binary concat ", y.shape)
 
-#Build neural net that classifies (binary) if row needs a target --> optimize this accuracy
-
-#Build neural net that predicts the rest of the rows
-
-#Combine prediction matrices
-
-#------------------------ Splitting data & Modeling ------------------------#
+#Percentage of rows 
+print("Rows with no target post-control group removal: ", np.sum(y_binary),  len(y_binary), " percentage no target: ", np.sum(y_binary)/len(y_binary)*100)
 #%%
+
+#for col in y_train.columns:
+ #   print(col)
+#------------------------ Splitting data ------------------------#
 #Train and validation data split
 X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
 X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=0)
@@ -81,19 +76,24 @@ print("X_val shape: ", X_val.shape)
 print("y_val shape: ", y_val.shape)
 print("X_val shape: ", X_test.shape)
 print("y_val shape: ", y_test.shape)
-
 #%%
+#------------------------ Multilabel classification ------------------------#
 #Multilabel classification baseline model
 model = Sequential()
-model.add(Dense(16, activation='relu')) 
-model.add(Dense(16, activation='relu')) 
-model.add(Dense(206, activation='softmax')) 
-model.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=1, epochs=2)
+model.add(Dense(16, activation='elu')) 
+model.add(Dense(16, activation='elu')) 
+model.add(Dense(207, activation='sigmoid')) 
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=["acc"]) 
+model.fit(X_train, y_train, batch_size=64, epochs=5)
 #Get validation loss/acc
-results = model.evaluate(X_val, y_val, batch_size=1)
+results = model.evaluate(X_val, y_val, batch_size=64)
 #Predict on test set to get final results
 y_pred = model.predict(X_test)
+
+#%%
+#Get y pred without dummy column
+print(np.array(y_test)[:,:206].shape)
+print(y_pred[:,:206].shape)
 #%%
 print("Shape of predicted values: ", y_pred.shape)
 print("Shape of y_test values: ", y_test.shape)
@@ -101,19 +101,6 @@ print("Shape of y_test values: ", y_test.shape)
 #Get max probabilities for each row of predicted matrix
 for i in range(0, y_pred.shape[0]):
     print("Unique values/row, for row nr:",i, ": ", np.unique(y_pred[i]), np.unique(np.array(y_test.iloc[i])))
-
-
-#%%
-
-#model.evaluate()
-# Early stopping 
-#es = EarlyStopping(monitor='val_loss', mode='min', verbose=1, patience=4)  
-# Callbacks
-#mc = ModelCheckpoint('models/best_model.h5', monitor='val_loss', mode='min', save_best_only=True, verbose=1)   # ?
-
-#hs = model.fit(X_train, y_train, batch_size=128, epochs=40, validation_data=(X_val, y_val), verbose=1, callbacks=[es,mc])
-
-
 
 #Test set on which te results must be tested and handed in
 X_test = pd.read_csv(data_folder + "test_features.csv")
