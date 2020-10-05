@@ -6,20 +6,21 @@
 import pandas as pd
 import numpy as np
 import tensorflow as tf
+import seaborn as sns
 from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, ActivityRegularization
 from tensorflow.keras import Sequential
 from tensorflow.keras.regularizers import l1, l2, L1L2
 from tensorflow.keras.optimizers import SGD
-import seaborn as sns
 from sklearn.model_selection import train_test_split
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
 tf.config.list_physical_devices('GPU')
+
 #%%
 #------------------------ Loading data ------------------------#
 #data_folder = "/kaggle/input/lish-moa/"
 #output_folder = "/kaggle/working/"
-
+#https://www.codingforentrepreneurs.com/blog/install-tensorflow-gpu-windows-cuda-cudnn/
 data_folder = "data/"
 output_folder = "output/"
 
