@@ -6,12 +6,13 @@
 import pandas as pd
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, ActivityRegularization
 from tensorflow.keras import Sequential
+from tensorflow.keras.regularizers import l1, l2, L1L2
 from tensorflow.keras.optimizers import SGD
 import seaborn as sns
 from sklearn.model_selection import train_test_split
-
+#%%
 #------------------------ Loading data ------------------------#
 #data_folder = "/kaggle/input/lish-moa/"
 #output_folder = "/kaggle/working/"
@@ -97,6 +98,196 @@ print("X_test, y_test shape: ", X_test.shape, y_test.shape)
 
 #%%
 #------------------------ Multilabel classification ------------------------#
+#Loss on X_val, y_val = 0.0188
+#Loss on submit = 
+#Leaderboard approx position = 
+#Multilabel classification baseline model
+l1_reg = 0.000000001
+dropout_val = 0.2
+
+model = Sequential()
+model.add(Dense(128, activation='elu', activity_regularizer=L1L2(l1_reg)))
+model.add(Dropout(dropout_val))
+model.add(Dense(256, activation='elu', activity_regularizer=L1L2(l1_reg))) 
+model.add(Dropout(dropout_val))
+model.add(Dense(128, activation='elu', activity_regularizer=L1L2(l1_reg))) 
+model.add(Dropout(dropout_val))
+model.add(Dense(256, activation='elu', activity_regularizer=L1L2(l1_reg))) 
+model.add(Dense(207, activation='sigmoid')) 
+opti = SGD(lr=0.04, momentum=0.99)
+model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+model.fit(X_train, y_train, batch_size=6, epochs=50)
+
+# Early stopping 
+#es = EarlyStopping(monitor='val_loss', mode='min', verbose=1, patience=4)  
+# Callbacks
+#mc = ModelCheckpoint('models/best_model.h5', monitor='val_loss', mode='min', save_best_only=True, verbose=1)  
+
+
+#Get validation loss/acc
+results = model.evaluate(X_val, y_val, batch_size=1)
+
+#Predict on test set to get final results
+y_pred = model.predict(X_test)
+
+#Predict values for submit
+y_submit = model.predict(X_submit)
+#%%
+#Create dataframe and CSV for submission
+submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
+pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv.csv", index=False, header=y_cols)
+
+
+#%%
+#------------------------ Old models ------------------------#
+
+#------------------------ YET TO SUBMIT ------------------------#
+#Loss on X_val, y_val = 0.0188
+#Loss on submit = 
+#Leaderboard approx position = 
+#Multilabel classification baseline model
+l1_reg = 0.00000001
+dropout_val = 0.2
+
+model = Sequential()
+model.add(Dense(128, activation='elu', activity_regularizer=L1L2(l1_reg)))
+model.add(Dropout(dropout_val))
+model.add(Dense(128, activation='elu', activity_regularizer=L1L2(l1_reg))) 
+model.add(Dropout(dropout_val))
+model.add(Dense(128, activation='elu', activity_regularizer=L1L2(l1_reg))) 
+model.add(Dense(207, activation='sigmoid')) 
+opti = SGD(lr=0.05, momentum=0.99)
+model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+model.fit(X_train, y_train, batch_size=8, epochs=50)
+
+#Get validation loss/acc
+results = model.evaluate(X_val, y_val, batch_size=1)
+
+#Predict on test set to get final results
+y_pred = model.predict(X_test)
+
+#Predict values for submit
+y_submit = model.predict(X_submit)
+
+
+
+#Loss on X_val, y_val = 0.0188
+#Loss on submit = 
+#Leaderboard approx position = 
+#Multilabel classification baseline model
+l1_reg = 0.0000001
+dropout_val = 0.15
+
+model = Sequential()
+model.add(Dense(64, activation='elu', activity_regularizer=L1L2(l1_reg)))
+model.add(Dropout(dropout_val))
+model.add(Dense(64, activation='elu', activity_regularizer=L1L2(l1_reg))) 
+model.add(Dropout(dropout_val))
+model.add(Dense(64, activation='elu', activity_regularizer=L1L2(l1_reg))) 
+model.add(Dense(207, activation='sigmoid')) 
+opti = SGD(lr=0.05, momentum=0.98)
+model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+model.fit(X_train, y_train, batch_size=8, epochs=50)
+
+#Get validation loss/acc
+results = model.evaluate(X_val, y_val, batch_size=1)
+
+#Predict on test set to get final results
+y_pred = model.predict(X_test)
+
+#Predict values for submit
+y_submit = model.predict(X_submit)
+
+
+
+
+
+#Loss on X_val, y_val = 0.0189
+#Loss on submit = 
+#Leaderboard approx position = 
+#Multilabel classification baseline model
+model = Sequential()
+model.add(Dense(64, activation='elu'))
+model.add(Dropout(0.15))
+model.add(Dense(64, activation='elu')) 
+model.add(Dropout(0.15))
+model.add(Dense(64, activation='elu')) 
+model.add(Dense(207, activation='softmax')) 
+opti = SGD(lr=0.05, momentum=0.98)
+model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+model.fit(X_train, y_train, batch_size=4, epochs=50)
+
+#Get validation loss/acc
+results = model.evaluate(X_val, y_val, batch_size=1)
+
+
+
+
+
+#Loss on X_val, y_val = 0.0190
+#Loss on submit = 
+#Leaderboard approx position = 
+#Multilabel classification baseline model
+model = Sequential()
+model.add(Dense(32, activation='elu')) 
+model.add(Dropout(0.2))
+model.add(Dense(32, activation='elu')) 
+model.add(Dropout(0.2))
+model.add(Dense(207, activation='softmax')) 
+opti = SGD(lr=0.1, momentum=0.95)
+model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+model.fit(X_train, y_train, batch_size=4, epochs=50)
+
+#Get validation loss/acc
+results = model.evaluate(X_val, y_val, batch_size=1)
+
+
+
+
+
+#Loss on X_val, y_val = 0.0195
+#Loss on submit = 
+#Leaderboard approx position = 
+#Multilabel classification baseline model
+model = Sequential()
+model.add(Dense(32, activation='elu')) 
+model.add(Dropout(0.2))
+model.add(Dense(32, activation='elu')) 
+model.add(Dropout(0.2))
+model.add(Dense(207, activation='softmax')) 
+opti = SGD(lr=0.1, momentum=0.95)
+model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+model.fit(X_train, y_train, batch_size=8, epochs=40)
+
+#Get validation loss/acc
+results = model.evaluate(X_val, y_val, batch_size=1)
+
+
+
+
+#Loss on X_val, y_val = 0.0201
+#Loss on submit = 
+#Leaderboard approx position = 
+#Multilabel classification baseline model
+model = Sequential()
+model.add(Dense(32, activation='elu')) 
+model.add(Dropout(0.2))
+model.add(Dense(32, activation='elu')) 
+model.add(Dropout(0.2))
+model.add(Dense(207, activation='softmax')) 
+opti = SGD(lr=0.1, momentum=0.95)
+model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+model.fit(X_train, y_train, batch_size=8, epochs=20)
+
+#Get validation loss/acc
+results = model.evaluate(X_val, y_val, batch_size=1)
+
+
+
+#------------------------ Submitted ------------------------#
+#Loss on X_val, y_val = 0.0211
+#Loss on submit = 0.02151
+#Leaderboard approx position = 1673
 #Multilabel classification baseline model
 model = Sequential()
 model.add(Dense(32, activation='elu')) 
@@ -110,13 +301,3 @@ model.fit(X_train, y_train, batch_size=8, epochs=20)
 
 #Get validation loss/acc
 results = model.evaluate(X_val, y_val, batch_size=8)
-
-#Predict on test set to get final results
-y_pred = model.predict(X_test)
-
-#Predict values for submit
-y_submit = model.predict(X_submit)
-#%%
-#Create dataframe and CSV for submission
-submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
-pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv.csv", index=False, header=y_cols)
