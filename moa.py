@@ -6,13 +6,16 @@
 import pandas as pd
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import Dense
+from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras import Sequential
+from tensorflow.keras.optimizers import SGD
 import seaborn as sns
 from sklearn.model_selection import train_test_split
 
-
 #------------------------ Loading data ------------------------#
+#data_folder = "/kaggle/input/lish-moa/"
+#output_folder = "/kaggle/working/"
+
 data_folder = "data/"
 output_folder = "output/"
 
@@ -30,8 +33,13 @@ X_submit = pd.read_csv(data_folder + "test_features.csv")
 #------------------------ Subsetting data ------------------------#
 #Create subsets for train data
 print("X, y, X_submit shape before id remove: ", X.shape, y.shape, X_submit.shape)
+y_cols = y.columns
 X = X.iloc[:, 1:]
 y = y.iloc[:, 1:]
+
+#if os.path.exists("/kaggle/working/submission.csv"):
+ #   os.remove("/kaggle/working/submission.csv")
+
 
 #get subsets for submit data
 X_id_submit = X_submit.iloc[:, 0]
@@ -87,74 +95,28 @@ print("X_train, y_train shape: ", X_train.shape, y_train.shape)
 print("X_val, y_val shape: ", X_val.shape, y_val.shape)
 print("X_test, y_test shape: ", X_test.shape, y_test.shape)
 
+#%%
 #------------------------ Multilabel classification ------------------------#
 #Multilabel classification baseline model
 model = Sequential()
-model.add(Dense(16, activation='elu')) 
-model.add(Dense(16, activation='elu')) 
+model.add(Dense(32, activation='elu')) 
+model.add(Dropout(0.2))
+model.add(Dense(32, activation='elu')) 
+model.add(Dropout(0.2))
 model.add(Dense(207, activation='sigmoid')) 
-model.compile(optimizer='adam', loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=64, epochs=5)
+opti = SGD(lr=0.1, momentum=0.95)
+model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+model.fit(X_train, y_train, batch_size=8, epochs=20)
 
 #Get validation loss/acc
-results = model.evaluate(X_val, y_val, batch_size=64)
+results = model.evaluate(X_val, y_val, batch_size=8)
 
 #Predict on test set to get final results
 y_pred = model.predict(X_test)
 
-
 #Predict values for submit
 y_submit = model.predict(X_submit)
-
+#%%
 #Create dataframe and CSV for submission
 submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
-pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "sub_df.csv")
-
-#%%
-#Get y pred without dummy column
-print(np.array(y_test)[:,:206].shape)
-print(y_pred[:,:206].shape)
-#%%
-print("Shape of predicted values: ", y_pred.shape)
-print("Shape of y_test values: ", y_test.shape)
-#%%
-#Get max probabilities for each row of predicted matrix
-for i in range(0, y_pred.shape[0]):
-    print("Unique values/row, for row nr:",i, ": ", np.unique(y_pred[i]), np.unique(np.array(y_test.iloc[i])))
-
-#Test set on which te results must be tested and handed in
-X_test = pd.read_csv(data_folder + "test_features.csv")
-
-
-#%%
-#Targets
-
-train_target_nonscored = pd.read_csv(data_folder + "train_targets_nonscored.csv")
-print(train_target_nonscored.shape)
-print(train_target_scored.shape)
-#%%
-print(train_target_scored)
-for col in train_target_scored:
-    print(train_target_scored[col].value_counts())
-#%%
-for col in train_target_nonscored:
-    print(train_target_nonscored[col].value_counts())
-#%%
-print(train_feat.shape, test_feat.shape, train_target_scored.shape)
-#%%
-print(len(np.unique(train_feat["sig_id"])), np.unique(train_feat["sig_id"]))
-print(len(np.unique(train_feat["cp_type"])), np.unique(train_feat["cp_type"]))
-#%%
-sns.distplot(train_feat["g-0"], color='green')
-sns.distplot(train_feat["c-0"], color='red')
-#%%
-print(train_feat["cp_type"].value_counts())
-print(train_feat["cp_dose"].value_counts())
-
-print(train_feat[train_feat['c-0'] < -5].shape)
-
-# %%
-
-
-
-#%%
+pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv.csv", index=False, header=y_cols)
