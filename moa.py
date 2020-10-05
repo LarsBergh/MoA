@@ -12,6 +12,9 @@ from tensorflow.keras.regularizers import l1, l2, L1L2
 from tensorflow.keras.optimizers import SGD
 import seaborn as sns
 from sklearn.model_selection import train_test_split
+from tensorflow.python.client import device_lib
+from tensorflow.keras import backend as K
+tf.config.list_physical_devices('GPU')
 #%%
 #------------------------ Loading data ------------------------#
 #data_folder = "/kaggle/input/lish-moa/"
@@ -121,8 +124,9 @@ model.fit(X_train, y_train, batch_size=6, epochs=50)
 # Early stopping 
 #es = EarlyStopping(monitor='val_loss', mode='min', verbose=1, patience=4)  
 # Callbacks
-#mc = ModelCheckpoint('models/best_model.h5', monitor='val_loss', mode='min', save_best_only=True, verbose=1)  
-
+#mc = ModelCheckpoint('models/best_model.h5', monitor='val_loss', mode='min', save_best_only=True, verbose=1) 
+#  
+#https://stackoverflow.com/questions/51306862/how-do-i-use-tensorflow-gpu
 
 #Get validation loss/acc
 results = model.evaluate(X_val, y_val, batch_size=1)
