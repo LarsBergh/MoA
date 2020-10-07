@@ -56,7 +56,6 @@ print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape
 sns.displot(y.sum(axis=1))
 print(y.sum(axis=1).value_counts().sort_index(axis=0))
 print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
-#%%
 
 #------------------------ Encoding and scaling dataframe columns ------------------------#
 def pca(df, var_req, pca_type):
@@ -65,30 +64,38 @@ def pca(df, var_req, pca_type):
 
     #Get PCA dataframe based on gene/cell dataframe  
     pca_df = PCA(n_components=df_sub.shape[1], random_state=0).fit(df_sub)
-    
+
     #Get variance explained and tot variance
     vari = pca_df.explained_variance_
     tot_var = np.sum(vari)
 
     #Loop over variance until total variance exceeds required variance
-    for pc in range(1, len(vari)):    
-        expl_var = np.sum(vari[:pc])/tot_var  
-        print("Explained variance at ", pc, " is ", expl_var)  
+    cols = []
+    for pc in range(1, len(vari)): 
+
+        if pca_type == "gene":
+            cols.append('g-' + str(pc))
+
+        elif pca_type == "cell":
+            cols.append('c-' + str(pc))
+
+        expl_var = np.sum(vari[:pc])/tot_var   
         if expl_var > var_req:
             break
 
     #Return PCA df
-    return PCA(n_components=pc, random_state=0).fit_transform(df_sub), pc
+    return pd.DataFrame(PCA(n_components=pc, random_state=0).fit_transform(df_sub),columns=cols), pc
 
-gene_df, gene_comp = pca(df=X, var_req=0.8, pca_type="gene")
-cell_df, cell_comp = pca(df=X, var_req=0.9, pca_type="cell")
+#Apply PCA on gene/cell columns of X and X_submit
+g_df, g_comp = pca(df=X, var_req=0.8, pca_type="gene")
+c_df, c_comp = pca(df=X, var_req=0.9, pca_type="cell")
 
-print("Gene df", gene_df.shape, " amount of components with 80% var explained: " , gene_comp)
-print("Cell df", cell_df.shape, " amount of components with 90% var explained: " , cell_comp)
+g_df_sub, g_comp_sub = pca(df=X_submit, var_req=0.8, pca_type="gene")
+c_df_sub, c_comp_sub = pca(df=X_submit, var_req=0.9, pca_type="cell")
 
+print("Gene df", g_df.shape, " amount of components with 80% var explained: " , gene_comp)
+print("Cell df", c_df.shape, " amount of components with 90% var explained: " , cell_comp)
 
-
-#%%
 def encode_scale_df(df, cols):
     print("df before ecode/scale ", df)
 
@@ -110,11 +117,15 @@ def encode_scale_df(df, cols):
     print("df after ecode/scale", df)
     return df
 
-#Scale and encode X_submit and X dataframe
-X = encode_scale_df(df=X, cols=["cp_time", "cp_dose", "cp_type"])
-#%%
-X_submit = encode_scale_df(X_submit, ["cp_time", "cp_dose", "cp_type"])
+main_cols = ["cp_time", "cp_dose", "cp_type"]
+X = pd.concat([X[main_cols], g_df, c_df],axis=1)
+X_submit = pd.concat([X_submit[main_cols], g_df_sub, c_df_sub],axis=1)
 
+#Scale and encode X_submit and X dataframe
+X = encode_scale_df(df=X, cols=main_cols)
+X_submit = encode_scale_df(df=X_submit, cols=main_cols)
+
+#%%
 
 #Creates a variable that encodes no target prediction as extra column
 y_binary = (y.sum(axis=1) == 0).astype(int)
