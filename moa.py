@@ -9,6 +9,7 @@ import tensorflow as tf
 import seaborn as sns
 from tensorflow.keras.losses import BinaryCrossentropy
 from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
 from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, ActivityRegularization
 from tensorflow.keras import Sequential
 from tensorflow.keras.regularizers import l1, l2, L1L2
@@ -16,7 +17,7 @@ from tensorflow.keras.optimizers import SGD
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
 from tensorflow.python.client import device_lib
-print(device_lib.list_local_devices())
+#print(device_lib.list_local_devices())
 
 #------------------------ Loading data ------------------------#
 #data_folder = "/kaggle/input/lish-moa/"
@@ -55,19 +56,47 @@ print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape
 sns.displot(y.sum(axis=1))
 print(y.sum(axis=1).value_counts().sort_index(axis=0))
 print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
-
+#%%
 
 #------------------------ Encoding and scaling dataframe columns ------------------------#
-def encode_scale_df(df):
+def pca(df, var_req, pca_type):
+    #Get subset on gene or cell data
+    df_sub = df.loc[:,[x.startswith("g-") if pca_type == "gene" else x.startswith("c-") for x in df.columns]]
+
+    #Get PCA dataframe based on gene/cell dataframe  
+    pca_df = PCA(n_components=df_sub.shape[1], random_state=0).fit(df_sub)
+    
+    #Get variance explained and tot variance
+    vari = pca_df.explained_variance_
+    tot_var = np.sum(vari)
+
+    #Loop over variance until total variance exceeds required variance
+    for pc in range(1, len(vari)):    
+        expl_var = np.sum(vari[:pc])/tot_var  
+        print("Explained variance at ", pc, " is ", expl_var)  
+        if expl_var > var_req:
+            break
+
+    #Return PCA df
+    return PCA(n_components=pc, random_state=0).fit_transform(df_sub), pc
+
+gene_df, gene_comp = pca(df=X, var_req=0.8, pca_type="gene")
+cell_df, cell_comp = pca(df=X, var_req=0.9, pca_type="cell")
+
+print("Gene df", gene_df.shape, " amount of components with 80% var explained: " , gene_comp)
+print("Cell df", cell_df.shape, " amount of components with 90% var explained: " , cell_comp)
+
+
+
+#%%
+def encode_scale_df(df, cols):
     print("df before ecode/scale ", df)
 
     #Encode variables
-    enc_time_df = pd.get_dummies(df['cp_time'])
-    enc_dose_df = pd.get_dummies(df['cp_dose'])
-    enc_type_df = pd.get_dummies(df['cp_type'])
+    enc = pd.get_dummies(df, columns=cols)
 
     #Drop encoded variable columns for replacement
-    df = df.drop(["cp_time", "cp_dose", "cp_type"], axis=1)
+    df = df.drop(cols, axis=1)
 
     #Scale all variables that are left (all numerical)
     df=(df-df.min())/(df.max()-df.min())
@@ -75,15 +104,17 @@ def encode_scale_df(df):
     print(pd.concat([df.min(),df.max()],axis=1))
 
     #Compile new df from encoded vars & scaled vars
-    df = pd.concat([enc_dose_df, enc_time_df, enc_type_df, df],axis=1)
+    df = pd.concat([enc, df],axis=1)
     print("X shape after encoding and dropping: " , df.shape)
     print("X column names after encoding ", df.columns)
     print("df after ecode/scale", df)
     return df
 
 #Scale and encode X_submit and X dataframe
-X_submit = encode_scale_df(X_submit)
-X = encode_scale_df(X)
+X = encode_scale_df(df=X, cols=["cp_time", "cp_dose", "cp_type"])
+#%%
+X_submit = encode_scale_df(X_submit, ["cp_time", "cp_dose", "cp_type"])
+
 
 #Creates a variable that encodes no target prediction as extra column
 y_binary = (y.sum(axis=1) == 0).astype(int)
