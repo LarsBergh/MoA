@@ -10,6 +10,7 @@ import seaborn as sns
 from tensorflow.keras.losses import BinaryCrossentropy
 from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
+from sklearn.metrics import log_loss
 from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, ActivityRegularization
 from tensorflow.keras import Sequential
 from tensorflow.keras.regularizers import l1, l2, L1L2
@@ -58,20 +59,26 @@ print(y.sum(axis=1).value_counts().sort_index(axis=0))
 print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
 
 #------------------------ Encoding and scaling dataframe columns ------------------------#
-def pca(df, var_req, pca_type):
+def pca(df, df_sub, var_req, pca_type):
     #Get subset on gene or cell data
-    df_sub = df.loc[:,[x.startswith("g-") if pca_type == "gene" else x.startswith("c-") for x in df.columns]]
+    pca_cols = [x.startswith("g-") if pca_type == "gene" else x.startswith("c-") for x in df.columns]
+
+    #Get df subset based on pca cols
+    pca = df.loc[:,pca_cols]
+    pca_sub = df_sub.loc[:,pca_cols]
 
     #Get PCA dataframe based on gene/cell dataframe  
-    pca_df = PCA(n_components=df_sub.shape[1], random_state=0).fit(df_sub)
+    pca_fit = PCA(n_components=pca.shape[1], random_state=0).fit(pca)
+    pca_fit_sub = PCA(n_components=pca_sub.shape[1], random_state=0).fit(pca_sub)
 
     #Get variance explained and tot variance
-    vari = pca_df.explained_variance_
-    tot_var = np.sum(vari)
+    var_pca = pca_fit.explained_variance_
+    var_pca_sub = pca_fit_sub.explained_variance_
+    tot_var = np.sum(var_pca)
 
     #Loop over variance until total variance exceeds required variance
     cols = []
-    for pc in range(1, len(vari)): 
+    for pc in range(1, len(var_pca)): 
 
         if pca_type == "gene":
             cols.append('g-' + str(pc))
@@ -79,22 +86,21 @@ def pca(df, var_req, pca_type):
         elif pca_type == "cell":
             cols.append('c-' + str(pc))
 
-        expl_var = np.sum(vari[:pc])/tot_var   
+        expl_var = np.sum(var_pca[:pc])/tot_var   
         if expl_var > var_req:
             break
 
     #Return PCA df
-    return pd.DataFrame(PCA(n_components=pc, random_state=0).fit_transform(df_sub),columns=cols), pc
+    X_pca = pd.DataFrame(PCA(n_components=pc, random_state=0).fit_transform(pca),columns=cols)
+    X_sub_pca = pd.DataFrame(PCA(n_components=pc, random_state=0).fit_transform(pca_sub),columns=cols)
+    return X_pca, X_sub_pca, pc
 
 #Apply PCA on gene/cell columns of X and X_submit
-g_df, g_comp = pca(df=X, var_req=0.8, pca_type="gene")
-c_df, c_comp = pca(df=X, var_req=0.9, pca_type="cell")
+g_df, g_df_sub, g_comp = pca(df=X, df_sub=X_submit, var_req=0.99, pca_type="gene")
+c_df, c_df_sub, c_comp = pca(df=X, df_sub=X_submit, var_req=0.99, pca_type="cell")
 
-g_df_sub, g_comp_sub = pca(df=X_submit, var_req=0.8, pca_type="gene")
-c_df_sub, c_comp_sub = pca(df=X_submit, var_req=0.9, pca_type="cell")
-
-print("Gene df", g_df.shape, " amount of components with 80% var explained: " , gene_comp)
-print("Cell df", c_df.shape, " amount of components with 90% var explained: " , cell_comp)
+print("Gene df", g_df.shape, g_df_sub, " amount of components with 80% var explained: " , g_comp)
+print("Cell df", c_df.shape,  c_df_sub.shape, " amount of components with 90% var explained: " , c_comp)
 
 def encode_scale_df(df, cols):
     print("df before ecode/scale ", df)
@@ -125,8 +131,6 @@ X_submit = pd.concat([X_submit[main_cols], g_df_sub, c_df_sub],axis=1)
 X = encode_scale_df(df=X, cols=main_cols)
 X_submit = encode_scale_df(df=X_submit, cols=main_cols)
 
-#%%
-
 #Creates a variable that encodes no target prediction as extra column
 y_binary = (y.sum(axis=1) == 0).astype(int)
 y = pd.concat([y, y_binary], axis=1)
@@ -140,7 +144,7 @@ X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=
 print("X_train, y_train shape: ", X_train.shape, y_train.shape)
 print("X_val, y_val shape: ", X_val.shape, y_val.shape)
 print("X_test, y_test shape: ", X_test.shape, y_test.shape)
-#%%
+
 #------------------------ Ensure model reproducibility ------------------------
 #Start tensorflow session and set np and tensorflow seeds for this session
 np.random.seed(0)
@@ -149,11 +153,11 @@ sess = tf.compat.v1.Session(graph=tf.compat.v1.get_default_graph())
 tf.compat.v1.keras.backend.set_session(sess)
 
 #------------------------ Model creation ------------------------#
-def create_model(X, y, lay, acti, acti2, neur, drop, epo):
+def create_model(X, y, lay, acti_hid, acti_out, neur, drop, epo, opti):
     #Print model parameters
     print("Creating model with:")
-    print("Activation hidden: ", acti)
-    print("Activation output: ", acti2)
+    print("Activation hidden: ", acti_hid)
+    print("Activation output: ", acti_out)
     print("Hidden layer count: ", lay)
     print("Neuron count per layer: ", neur)
     print("Dropout value: ", drop)
@@ -164,18 +168,17 @@ def create_model(X, y, lay, acti, acti2, neur, drop, epo):
     
     #Create layers based on count with specified activations and dropouts
     for lay in range(0,lay):
-        model.add(Dense(neur, activation=acti))
+        model.add(Dense(neur, activation=acti_hid))
         model.add(Dropout(drop))
 
     #Add output layer
-    model.add(Dense(207, activation='softmax')) 
+    model.add(Dense(207, activation=acti_out)) 
 
     #Define optimizer and loss
-    opti = SGD(lr=0.05, momentum=0.98)
     model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
 
     #Fit and return model
-    model.fit(X, y, batch_size=4, epochs=epo)
+    model.fit(X, y, batch_size=8, epochs=epo)
     return model
 
 
@@ -184,31 +187,45 @@ def random_search(model_count):
     best_loss = 100000
     best_params = {}
 
-    layers = np.array([x for x in range(1, 5)]) #Layers 1 to 5
-    activations = ["relu", "sigmoid", "softmax", "softplus", "softsign", "tanh", "selu", "elu"] #All acti except for "exponential" because gives NA loss
+    """layers = np.array([x for x in range(1, 5)]) #Layers 1 to 5
+    activations = ["relu", "sigmoid", "softmax", "softplus", "softsign", "tanh", "selu", "elu", "linear"] #All acti except for "exponential" because gives NA loss
     dropout = [x for x in np.round(np.arange(0.1, 1, 0.1),1)] #dropout 0.1 to 0.9
     neurons = [8, 16, 32]
-    epochs = [1,2,3,4]
+    epochs = [1,2,3,4]"""
+
+    layers = [2,3,4] #Layers 1 to 5
+    acti_hid = ["elu"] #All acti except for "exponential" because gives NA loss
+    acti_out = ["softmax"] #All acti except for "exponential" because gives NA loss
+    dropout = [0.2] #dropout 0.1 to 0.9
+    neurons = [16, 32, 64]
+    epochs = [10, 20, 30]
+    optimizers = ["adadelta", "adagrad", "adam", "adamax", "ftrl", "nadam", "rmsprop", "sgd", SGD(lr=0.05, momentum=0.98)]
 
     for model in range(0, model_count):
         #Randomly select parameters from parameter lists
         params = {}
-        para_dic = {"lay": layers, "acti": activations, "acti2": activations, "neur": neurons, "drop": dropout, "epo": epochs}
+
+        para_dic = {"lay": layers, "acti_hid": acti_hid, 
+                    "acti_out": acti_out, "neur": neurons, 
+                    "drop": dropout, "epo": epochs,
+                    "opti": optimzers}
+
         for key, parameters in para_dic.items():
             params[key] = random.choice(parameters)
 
         #Create model and fit on data on randomly selected parameters
         model = create_model(X=X_train, y=y_train, 
                             lay=params["lay"], 
-                            acti=params["acti"], 
-                            acti2=params["acti2"], 
+                            acti_hid=params["acti_hid"], 
+                            acti_out=params["acti_out"], 
                             neur=params["neur"], 
                             drop=params["drop"], 
-                            epo=params["epo"])
+                            epo=params["epo"],
+                            opti=params["optimizers"])
 
         #Get validation loss/acc
-        val_loss = model.evaluate(X_val, y_val, batch_size=1)
-        test_loss = model.evaluate(X_test, y_test, batch_size=1)
+        val_loss = model.evaluate(X_val, y_val, batch_size=8)
+        test_loss = model.evaluate(X_test, y_test, batch_size=8)
 
         if test_loss[0] < best_loss:
             print("Better loss found. From ", best_loss ," to ", test_loss[0])
@@ -220,13 +237,20 @@ def random_search(model_count):
 
 #Run random search 
 best_params, best_loss, model = random_search(model_count=1)
+print("Best params: ", best_params, " Best loss: ", best_loss)
 
 #Calculate Binary Crossentropy of model without last column
 y_val_pred = model.predict(X_val)
 y_test_pred = model.predict(X_test)
-bce = tf.keras.losses.BinaryCrossentropy()
-print("Val loss without last col: ",bce(y_val.iloc[:,:206], y_val_pred[:,:206]).numpy())
-print("Test loss without last col: ", bce(y_test.iloc[:,:206], y_test_pred[:,:206]).numpy())
+#%%
+#------------------------ Calculate log loss -----------------------------#
+val_loss = 0
+test_loss = 0
+for col in range(len(y_val.columns)):
+    val_loss += log_loss(np.array(y_val.iloc[:,col]), y_val_pred[:,col], labels=[0,1]) / y_val.shape[1]
+    test_loss += log_loss(np.array(y_test.iloc[:,col]), y_test_pred[:,col], labels=[0,1]) / y_test.shape[1]
+
+print("Val loss: ",val_loss, "Test loss: ", test_loss)
 #%%
 #Predict values for submit
 y_submit = model.predict(X_submit)
@@ -235,3 +259,5 @@ y_submit = model.predict(X_submit)
 submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
 
+
+# %%
