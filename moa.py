@@ -7,12 +7,13 @@ import pandas as pd
 import numpy as np
 import tensorflow as tf
 import seaborn as sns
+import matplotlib.pyplot as plt
 from tensorflow.keras.losses import BinaryCrossentropy
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.decomposition import PCA
 from sklearn.metrics import log_loss
 from tensorflow.keras.callbacks import History, EarlyStopping
-from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, ActivityRegularization
+from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, ActivityRegularization, BatchNormalization
 from tensorflow.keras import Sequential
 from tensorflow.keras.regularizers import l1, l2, L1L2
 from tensorflow.keras.optimizers import SGD
@@ -22,19 +23,29 @@ from tensorflow.python.client import device_lib
 #print(device_lib.list_local_devices())
 
 #------------------------ Relevant parameters ------------------------#
+#is kaggle
+is_kaggle = False
+
 #Determines how much variance must be explained by gene and cell columns for PCA
-G_VAR_REQ = 0.7
-C_VAR_REQ = 0.85
+C_VAR_REQ = None
+G_VAR_REQ = None
+
+C_PCA_REQ = 4
+G_PCA_REQ = 29
 
 #Determines folds in K-fold cross validation
 N_FOLD = 3
 
 
 #------------------------ Loading data ------------------------#
-#data_folder = "/kaggle/input/lish-moa/"
-#output_folder = "/kaggle/working/"
-data_folder = "data/"
-output_folder = "output/"
+if is_kaggle == True:
+    data_folder = "/kaggle/input/lish-moa/"
+    output_folder = "/kaggle/working/"
+    if os.path.exists("/kaggle/working/submission.csv"):
+        os.remove("/kaggle/working/submission.csv")
+else:
+    data_folder = "data/"
+    output_folder = "output/"
 
 X = pd.read_csv(data_folder + "train_features.csv")
 y = pd.read_csv(data_folder + "train_targets_scored.csv")
@@ -54,9 +65,6 @@ y_cols = y.columns
 X = X.iloc[:, 1:]
 y = y.iloc[:, 1:]
 
-#if os.path.exists("/kaggle/working/submission.csv"):
- #   os.remove("/kaggle/working/submission.csv")
-
 #get subsets for submit data
 X_id_submit = X_submit.iloc[:, 0]
 X_submit = X_submit.iloc[:, 1:]
@@ -64,12 +72,13 @@ print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape
 
 #------------------------ Exporatory Data Analysis ------------------------#
 #Show distribution of amount of labels per row
-sns.displot(y.sum(axis=1))
+if is_kaggle == False:
+    sns.displot(y.sum(axis=1))
 print(y.sum(axis=1).value_counts().sort_index(axis=0))
 print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
 
 #------------------------ Encoding and scaling dataframe columns ------------------------#
-def pca(df, df_sub, var_req, pca_type):
+def pca(df, df_sub, pca_type, var_req=None, num_req=None):
     #Get subset on gene or cell data
     pca_cols = [x.startswith("g-") if pca_type == "gene" else x.startswith("c-") for x in df.columns]
 
@@ -88,6 +97,8 @@ def pca(df, df_sub, var_req, pca_type):
 
     #Loop over variance until total variance exceeds required variance
     cols = []
+    comp = None
+
     for pc in range(1, len(var_pca)): 
 
         if pca_type == "gene":
@@ -96,21 +107,28 @@ def pca(df, df_sub, var_req, pca_type):
         elif pca_type == "cell":
             cols.append('c-' + str(pc))
 
-        expl_var = np.sum(var_pca[:pc])/tot_var   
-        if expl_var > var_req:
+        if var_req != None: 
+            expl_var = np.sum(var_pca[:pc])/tot_var   
+            if expl_var > var_req:
+                comp = pc
+                break
+    
+        if num_req != None and pc == num_req:
+            comp = num_req
             break
 
     #Return PCA df
-    X_pca = pd.DataFrame(PCA(n_components=pc, random_state=0).fit_transform(pca),columns=cols)
-    X_sub_pca = pd.DataFrame(PCA(n_components=pc, random_state=0).fit_transform(pca_sub),columns=cols)
+    X_pca = pd.DataFrame(PCA(n_components=comp, random_state=0).fit_transform(pca),columns=cols)
+    X_sub_pca = pd.DataFrame(PCA(n_components=comp, random_state=0).fit_transform(pca_sub),columns=cols)
+
     return X_pca, X_sub_pca
 
 #Apply PCA on gene/cell columns of X and X_submit
-g_df, g_df_sub = pca(df=X, df_sub=X_submit, var_req=G_VAR_REQ, pca_type="gene")
-c_df, c_df_sub = pca(df=X, df_sub=X_submit, var_req=C_VAR_REQ, pca_type="cell")
+g_df, g_df_sub = pca(df=X, df_sub=X_submit, pca_type="gene", var_req=None, num_req=G_PCA_REQ)
+c_df, c_df_sub = pca(df=X, df_sub=X_submit, pca_type="cell", var_req=None, num_req=C_PCA_REQ)
 
-print("Gene df", g_df.shape, "Gene df submit: ", g_df_sub.shape, " with", G_VAR_REQ*100, "% var explained: ")
-print("Cell df", c_df.shape, "Cell df",  c_df_sub.shape, " with", C_VAR_REQ*100, "% var explained: ")
+print("Gene df", g_df.shape, "Gene df submit: ", g_df_sub.shape, " with", G_VAR_REQ, "% var explained: ")
+print("Cell df", c_df.shape, "Cell df",  c_df_sub.shape, " with", C_VAR_REQ, "% var explained: ")
 
 def encode_scale_df(df, cols):
     #Create encode df and drop encoded vars from df
@@ -162,11 +180,11 @@ def select_random_parameters(n_param_sets):
 
     #Define lists with parameter options
     layers = [3] #Layers 1 to 5
-    acti_hid = ["selu"] #All acti except for "exponential" because gives NA loss
+    acti_hid = ["elu"] #All acti except for "exponential" because gives NA loss
     acti_out = ["softmax"] #All acti except for "exponential" because gives NA loss
-    dropout = [0.2] #dropout 0.1 to 0.9
+    dropout = [0.15] #dropout 0.1 to 0.9
     neurons = [64]
-    epochs = [35]
+    epochs = [18]
     optimizers = [SGD(lr=0.05, momentum=0.98)]
 
     #Create dictionary of parameters
@@ -207,9 +225,13 @@ def create_model(X_train, X_val, y_train, y_val, lay, acti_hid, acti_out, neur, 
     model = Sequential()
     
     #Create layers based on count with specified activations and dropouts
-    for lay in range(0,lay):
+    for l in range(0,lay):
+        model.add(BatchNormalization())
         model.add(Dense(neur, activation=acti_hid))
-        model.add(Dropout(drop))
+        
+        #Add dropout except for last layer
+        if l != lay - 1:
+            model.add(Dropout(drop))
 
     #Add output layer
     model.add(Dense(207, activation=acti_out)) 
@@ -219,10 +241,10 @@ def create_model(X_train, X_val, y_train, y_val, lay, acti_hid, acti_out, neur, 
 
     #Define callbacks
     hist = History()
-    early_stop = EarlyStopping(monitor='val_loss', patience=4, mode='auto')
+    early_stop = EarlyStopping(monitor='val_loss', patience=5, mode='auto')
 
     #Fit and return model and loss history
-    model.fit(X_train, y_train, batch_size=16, epochs=epo, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
+    model.fit(X_train, y_train, batch_size=8, epochs=epo, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
     return model, hist
 
 
@@ -289,14 +311,18 @@ best_params, best_loss, best_model, best_hist = k_fold(X=X, y=y, n_fold=N_FOLD, 
 
 #Print best parameters
 print("Best params: ", best_params)
-
+#%%
 #Print loss history
 print("Best history: " , best_hist.history["loss"])
 t_loss_df = pd.DataFrame(best_hist.history["loss"])
 v_loss_df = pd.DataFrame(best_hist.history["val_loss"])
+
 loss_df = pd.concat([t_loss_df, v_loss_df], axis=1, keys=["Train loss", "Validation loss"])
 
-sns.lineplot(data=loss_df)
+if is_kaggle == False:
+    plt.clf()
+    sns.lineplot(data=loss_df)
+
 
 #Predict values for submit
 y_submit = best_model.predict(X_submit)
