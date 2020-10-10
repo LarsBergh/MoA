@@ -11,6 +11,7 @@ from tensorflow.keras.losses import BinaryCrossentropy
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.decomposition import PCA
 from sklearn.metrics import log_loss
+from tensorflow.keras.callbacks import History, EarlyStopping
 from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, ActivityRegularization
 from tensorflow.keras import Sequential
 from tensorflow.keras.regularizers import l1, l2, L1L2
@@ -19,6 +20,15 @@ from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
 from tensorflow.python.client import device_lib
 #print(device_lib.list_local_devices())
+
+#------------------------ Relevant parameters ------------------------#
+#Determines how much variance must be explained by gene and cell columns for PCA
+G_VAR_REQ = 0.7
+C_VAR_REQ = 0.85
+
+#Determines folds in K-fold cross validation
+N_FOLD = 3
+
 
 #------------------------ Loading data ------------------------#
 #data_folder = "/kaggle/input/lish-moa/"
@@ -96,13 +106,11 @@ def pca(df, df_sub, var_req, pca_type):
     return X_pca, X_sub_pca
 
 #Apply PCA on gene/cell columns of X and X_submit
-g_var_req, c_var_req = 0.7, 0.9
+g_df, g_df_sub = pca(df=X, df_sub=X_submit, var_req=G_VAR_REQ, pca_type="gene")
+c_df, c_df_sub = pca(df=X, df_sub=X_submit, var_req=C_VAR_REQ, pca_type="cell")
 
-g_df, g_df_sub = pca(df=X, df_sub=X_submit, var_req=g_var_req, pca_type="gene")
-c_df, c_df_sub = pca(df=X, df_sub=X_submit, var_req=c_var_req, pca_type="cell")
-
-print("Gene df", g_df.shape, "Gene df submit: ", g_df_sub.shape, " with", g_var_req*100, "% var explained: ")
-print("Cell df", c_df.shape, "Cell df",  c_df_sub.shape, " with", c_var_req*100, "% var explained: ")
+print("Gene df", g_df.shape, "Gene df submit: ", g_df_sub.shape, " with", G_VAR_REQ*100, "% var explained: ")
+print("Cell df", c_df.shape, "Cell df",  c_df_sub.shape, " with", C_VAR_REQ*100, "% var explained: ")
 
 def encode_scale_df(df, cols):
     #Create encode df and drop encoded vars from df
@@ -132,16 +140,6 @@ X_submit = encode_scale_df(df=X_submit, cols=main_cols)
 y_binary = (y.sum(axis=1) == 0).astype(int)
 y = pd.concat([y, y_binary], axis=1)
 
-#------------------------ Splitting data ------------------------#
-#Train and validation data split
-"""X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
-X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=0)
-
-#Print resulting shapes of splitted datasets
-print("X_train, y_train shape: ", X_train.shape, y_train.shape)
-print("X_val, y_val shape: ", X_val.shape, y_val.shape)
-print("X_test, y_test shape: ", X_test.shape, y_test.shape)"""
-
 #------------------------ Ensure model reproducibility ------------------------
 #Start tensorflow session and set np and tensorflow seeds for this session
 np.random.seed(0)
@@ -168,8 +166,8 @@ def select_random_parameters(n_param_sets):
     acti_out = ["softmax"] #All acti except for "exponential" because gives NA loss
     dropout = [0.2] #dropout 0.1 to 0.9
     neurons = [64]
-    epochs = [25]
-    optimizers = ["adam"]
+    epochs = [35]
+    optimizers = [SGD(lr=0.05, momentum=0.98)]
 
     #Create dictionary of parameters
     para_dic = {"lay": layers, "acti_hid": acti_hid, 
@@ -194,7 +192,7 @@ def select_random_parameters(n_param_sets):
     return params_set_list
 
 #------------------------ Model creation ------------------------#
-def create_model(X, y, lay, acti_hid, acti_out, neur, drop, epo, opti):
+def create_model(X_train, X_val, y_train, y_val, lay, acti_hid, acti_out, neur, drop, epo, opti):
     #Print model parameters
     print("Creating model with:")
     print("Activation hidden: ", acti_hid)
@@ -219,14 +217,24 @@ def create_model(X, y, lay, acti_hid, acti_out, neur, drop, epo, opti):
     #Define optimizer and loss
     model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
 
-    #Fit and return model
-    model.fit(X, y, batch_size=16, epochs=epo)
-    return model
+    #Define callbacks
+    hist = History()
+    early_stop = EarlyStopping(monitor='val_loss', patience=4, mode='auto')
+
+    #Fit and return model and loss history
+    model.fit(X_train, y_train, batch_size=16, epochs=epo, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
+    return model, hist
 
 
 
 #------------------------ K fold for given parameter lists ------------------------#
 def k_fold(X, y, n_fold, param_set_list):
+
+    #Split data into train and test. train will be splitted later in K-fold
+    X, X_test, y, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+    print("X_train, X_test, y_train, y_test shape: ", X.shape, X_test.shape, y.shape, y_test.shape)
+
+
     best_loss = 100000
     best_params = {}
 
@@ -243,12 +251,14 @@ def k_fold(X, y, n_fold, param_set_list):
                 
             #Define train and test for Kfolds
             X_train = X.iloc[train_i,:]
-            X_test = X.iloc[test_i,:]
-            y_train = y.iloc[train_i,:]
-            y_test = y.iloc[test_i,:]
+            X_val = X.iloc[test_i, :]
+            y_train = y.iloc[train_i, :]
+            y_val = y.iloc[test_i, :]
 
             #Create a model for each split 
-            model = create_model(X=X_train, y=y_train, 
+            model, hist = create_model(
+                    X_train=X_train, X_val=X_val, 
+                    y_train=y_train, y_val=y_val, 
                     lay=par_dic["lay"], 
                     acti_hid=par_dic["acti_hid"], 
                     acti_out=par_dic["acti_out"], 
@@ -256,17 +266,11 @@ def k_fold(X, y, n_fold, param_set_list):
                     drop=par_dic["drop"], 
                     epo=par_dic["epo"],
                     opti=par_dic["opti"])
-
-            #Predict y_val for each fold for each parameter set
-            y_test_pred = model.predict(X_test)
             
-            """"Rewrite as 1 line"""
             #Calculate and print log loss for validation and test 
-            val_loss = 0
-            for col in range(len(y_test.columns)):
-                val_loss += log_loss(np.array(y_test.iloc[:,col]), y_test_pred[:,col], labels=[0,1]) / y_test.shape[1]
-            print("Val loss: ",val_loss)
-            val_loss_total += val_loss
+            test_loss = model.evaluate(X_test, y_test, batch_size=1)[0]
+            val_loss_total += test_loss
+            print("Current test loss: ", test_loss)
 
         #Find best loss of averaged Kfolds for all parameter sets
         if val_loss_total/n_fold < best_loss:
@@ -275,19 +279,27 @@ def k_fold(X, y, n_fold, param_set_list):
             best_params = par_dic
             best_model = model
             
-    return best_params, best_loss, best_model
+    return best_params, best_loss, best_model, hist
 
 #Select random parameters
 param_set_list = select_random_parameters(1)
 
-#Apply K_fold on the randomly selected parameter sets
-best_params, best_loss, model = k_fold(X=X, y=y, n_fold=3, param_set_list=param_set_list)
+#Apply K_fold on on the randomly selected parameter sets with train data
+best_params, best_loss, best_model, best_hist = k_fold(X=X, y=y, n_fold=N_FOLD, param_set_list=param_set_list)
 
-#Print best parameters and best loss
-print("Best params: ", best_params, " Best loss: ", best_loss)
+#Print best parameters
+print("Best params: ", best_params)
+
+#Print loss history
+print("Best history: " , best_hist.history["loss"])
+t_loss_df = pd.DataFrame(best_hist.history["loss"])
+v_loss_df = pd.DataFrame(best_hist.history["val_loss"])
+loss_df = pd.concat([t_loss_df, v_loss_df], axis=1, keys=["Train loss", "Validation loss"])
+
+sns.lineplot(data=loss_df)
 
 #Predict values for submit
-y_submit = model.predict(X_submit)
+y_submit = best_model.predict(X_submit)
 
 #Create dataframe and CSV for submission
 submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
