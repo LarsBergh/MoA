@@ -185,12 +185,12 @@ def select_random_parameters(n_param_sets):
     #"selu", softmax, 3, layers, 64 neuron, 25 epoch, adam
 
     #Define lists with parameter options
-    layers = [3] #Layers 1 to 5
+    layers = [7] #Layers 1 to 5
     acti_hid = ["elu"] #All acti except for "exponential" because gives NA loss
     acti_out = ["softmax"] #All acti except for "exponential" because gives NA loss
     dropout = [0.15] #dropout 0.1 to 0.9
-    neurons = [128]
-    epochs = [5]
+    neurons = [32]
+    epochs = [30]
     optimizers = [SGD(lr=0.05, momentum=0.98)]
     
     #Create dictionary of parameters
@@ -316,9 +316,12 @@ best_params, best_loss, best_model, best_hist = k_fold(X=X, y=y, n_fold=N_FOLD, 
 
 #Print best parameters
 print("Best params: ", best_params)
-
+#%%
 #Print loss history
 print("Best history: " , best_hist.history["loss"])
+
+print("best history validatoin ", np.argmin(best_hist.history["val_loss"]))
+
 t_loss_df = pd.DataFrame(best_hist.history["loss"])
 v_loss_df = pd.DataFrame(best_hist.history["val_loss"])
 
