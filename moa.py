@@ -18,7 +18,8 @@ from tensorflow.keras.optimizers import SGD, Adam
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
 #print(device_lib.list_local_devices())
-
+tf.config.experimental.list_physical_devices('GPU')
+#print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 #------------------------ Relevant parameters ------------------------#
 #is kaggle
 is_kaggle = False
@@ -38,7 +39,6 @@ N_FOLD = 2
 L_SPEED = 0.001
 W_DECAY = 0.00001
 
-
 #------------------------ Loading data ------------------------#
 if is_kaggle == True:
     data_folder = "/kaggle/input/lish-moa/"
@@ -49,9 +49,14 @@ else:
     data_folder = "data/"
     output_folder = "output/"
 
-X = pd.read_csv(data_folder + "train_features.csv")
+X= pd.read_csv(data_folder + "train_features.csv")
 y = pd.read_csv(data_folder + "train_targets_scored.csv")
 X_submit = pd.read_csv(data_folder + "test_features.csv")
+
+#Remove control group rows
+#treat_rows = X_read["cp_type"] == "trt_cp"
+#X = X_read.loc[treat_rows]
+#y = y_read.loc[treat_rows]
 
 #Description of task	Predicting a receptor respons based on gene expression, cell viability, drug, dose, and treatment type
 #cp_type	        trt_cp (treatment), ctl_vehicle (control group)
@@ -68,8 +73,8 @@ X = X.iloc[:, 1:]
 y = y.iloc[:, 1:]
 
 #get subsets for submit data
-X_id_submit = X_submit.iloc[:, 0]
 X_submit = X_submit.iloc[:, 1:]
+X_id_submit = X_submit.iloc[:, 0]
 print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape)
 
 #------------------------ Exporatory Data Analysis ------------------------#
@@ -130,6 +135,8 @@ def pca(df, df_sub, pca_type, var_req=None, num_req=None):
     return X_pca, X_sub_pca
 
 #Apply PCA on gene/cell columns of X and X_submit
+print("Before PCA shape", X.shape, y.shape)
+
 g_df, g_df_sub = pca(df=X, df_sub=X_submit, pca_type="gene", var_req=None, num_req=G_PCA_REQ)
 c_df, c_df_sub = pca(df=X, df_sub=X_submit, pca_type="cell", var_req=None, num_req=C_PCA_REQ)
 
@@ -137,9 +144,10 @@ print("Gene df", g_df.shape, "Gene df submit: ", g_df_sub.shape, " with", G_VAR_
 print("Cell df", c_df.shape, "Cell df",  c_df_sub.shape, " with", C_VAR_REQ, "% var explained: ")
 
 def encode_scale_df(df, cols):
-    #Create encode df and drop encoded vars from df
-    enc = pd.get_dummies(df[cols], columns=cols)
     
+    #Create encode df and drop encoded vars from df (all except for cp_type)
+    enc = pd.get_dummies(df[cols], columns=cols)
+
     #Drop encoded vars from df
     df = df.drop(cols, axis=1)
 
@@ -156,10 +164,12 @@ main_cols = ["cp_time", "cp_dose", "cp_type"]
 X = pd.concat([X[main_cols], g_df, c_df],axis=1)
 X_submit = pd.concat([X_submit[main_cols], g_df_sub, c_df_sub],axis=1)
 
-#Scale and encode X_submit and X dataframe
+#Scale and encode X_submit and X dataframe/ remove control group rows
 X = encode_scale_df(df=X, cols=main_cols)
 X_submit = encode_scale_df(df=X_submit, cols=main_cols)
+print("after ecoding and scaling ", X.shape, y.shape)
 
+#%%
 #Creates a variable that encodes no target prediction as extra column
 #y_binary = (y.sum(axis=1) == 0).astype(int)
 #y = pd.concat([y, y_binary], axis=1)
@@ -185,12 +195,12 @@ def select_random_parameters(n_param_sets):
     #"selu", softmax, 3, layers, 64 neuron, 25 epoch, adam
 
     #Define lists with parameter options
-    layers = [7] #Layers 1 to 5
-    acti_hid = ["elu"] #All acti except for "exponential" because gives NA loss
+    layers = [5] #Layers 1 to 5
+    acti_hid = ["linear"] #All acti except for "exponential" because gives NA loss
     acti_out = ["softmax"] #All acti except for "exponential" because gives NA loss
     dropout = [0.15] #dropout 0.1 to 0.9
     neurons = [32]
-    epochs = [30]
+    epochs = [25]
     optimizers = [SGD(lr=0.05, momentum=0.98)]
     
     #Create dictionary of parameters
@@ -227,6 +237,7 @@ def create_model(X_train, X_val, y_train, y_val, lay, acti_hid, acti_out, neur, 
     print("Epoch count: ", epo)
     print("Optimizer: ", opti)
 
+    
     #Create model
     model = Sequential()
     
@@ -256,7 +267,7 @@ def create_model(X_train, X_val, y_train, y_val, lay, acti_hid, acti_out, neur, 
 
 #------------------------ K fold for given parameter lists ------------------------#
 def k_fold(X, y, n_fold, param_set_list):
-
+    print(X.shape, y.shape)
     #Split data into train and test. train will be splitted later in K-fold
     X, X_test, y, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
     print("X_train, X_test, y_train, y_test shape: ", X.shape, X_test.shape, y.shape, y_test.shape)
@@ -316,7 +327,7 @@ best_params, best_loss, best_model, best_hist = k_fold(X=X, y=y, n_fold=N_FOLD, 
 
 #Print best parameters
 print("Best params: ", best_params)
-#%%
+
 #Print loss history
 print("Best history: " , best_hist.history["loss"])
 
