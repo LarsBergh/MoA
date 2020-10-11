@@ -26,8 +26,6 @@ y_pred = model.predict(X_test)
 #Predict values for submit
 y_submit = model.predict(X_submit)
 
-
-
 #Loss on X_val, y_val = 0.0188
 #Loss on submit = 
 #Leaderboard approx position = 
@@ -179,3 +177,12 @@ model.fit(X_train, y_train, batch_size=8, epochs=20)
 
 #Get validation loss/acc
 results = model.evaluate(X_val, y_val, batch_size=8)
+
+
+#
+Activation hidden:  elu
+Activation output:  selu
+Hidden layer count:  1
+Neuron count per layer:  32
+Dropout value:  0.2
+Epoch count:  3

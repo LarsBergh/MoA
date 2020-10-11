@@ -8,18 +8,15 @@ import numpy as np
 import tensorflow as tf
 import seaborn as sns
 import matplotlib.pyplot as plt
-from tensorflow.keras.losses import BinaryCrossentropy
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.decomposition import PCA
-from sklearn.metrics import log_loss
 from tensorflow.keras.callbacks import History, EarlyStopping
-from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, ActivityRegularization, BatchNormalization
+from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, BatchNormalization
 from tensorflow.keras import Sequential
 from tensorflow.keras.regularizers import l1, l2, L1L2
-from tensorflow.keras.optimizers import SGD
+from tensorflow.keras.optimizers import SGD, Adam
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
-from tensorflow.python.client import device_lib
 #print(device_lib.list_local_devices())
 
 #------------------------ Relevant parameters ------------------------#
@@ -30,11 +27,16 @@ is_kaggle = False
 C_VAR_REQ = None
 G_VAR_REQ = None
 
-C_PCA_REQ = 4
-G_PCA_REQ = 29
+C_PCA_REQ = 100
+G_PCA_REQ = 772
+
+L1_REG = 0.000000001
 
 #Determines folds in K-fold cross validation
-N_FOLD = 3
+N_FOLD = 2
+
+L_SPEED = 0.001
+W_DECAY = 0.00001
 
 
 #------------------------ Loading data ------------------------#
@@ -98,8 +100,15 @@ def pca(df, df_sub, pca_type, var_req=None, num_req=None):
     #Loop over variance until total variance exceeds required variance
     cols = []
     comp = None
+    
+    if num_req != None: 
+        for_len = num_req
+        comp = num_req
 
-    for pc in range(1, len(var_pca)): 
+    elif var_req != None:
+        for_len = len(var_pca)
+
+    for pc in range(0, for_len): 
 
         if pca_type == "gene":
             cols.append('g-' + str(pc))
@@ -108,14 +117,11 @@ def pca(df, df_sub, pca_type, var_req=None, num_req=None):
             cols.append('c-' + str(pc))
 
         if var_req != None: 
-            expl_var = np.sum(var_pca[:pc])/tot_var   
+            expl_var = np.sum(var_pca[:pc])/tot_var  
+
             if expl_var > var_req:
                 comp = pc
                 break
-    
-        if num_req != None and pc == num_req:
-            comp = num_req
-            break
 
     #Return PCA df
     X_pca = pd.DataFrame(PCA(n_components=comp, random_state=0).fit_transform(pca),columns=cols)
@@ -155,8 +161,8 @@ X = encode_scale_df(df=X, cols=main_cols)
 X_submit = encode_scale_df(df=X_submit, cols=main_cols)
 
 #Creates a variable that encodes no target prediction as extra column
-y_binary = (y.sum(axis=1) == 0).astype(int)
-y = pd.concat([y, y_binary], axis=1)
+#y_binary = (y.sum(axis=1) == 0).astype(int)
+#y = pd.concat([y, y_binary], axis=1)
 
 #------------------------ Ensure model reproducibility ------------------------
 #Start tensorflow session and set np and tensorflow seeds for this session
@@ -174,7 +180,7 @@ def select_random_parameters(n_param_sets):
     dropout = [x for x in np.round(np.arange(0.1, 1, 0.1),1)] #dropout 0.1 to 0.9
     neurons = [8, 16, 32]
     epochs = [1,2,3,4]
-    optimizers = ["adadelta", "adagrad", "adam", "adamax", "ftrl", "nadam", "rmsprop", "sgd", SGD(lr=0.05, momentum=0.98)]
+    optimizers = ["adadelta", "adagrad", "adam", "adamax", "ftrl", "nadam", "rmsprop", "sgd", SGD(lr=0.05, momentum=0.98),Adam(learning_rate=L_SPEED)]
 """
     #"selu", softmax, 3, layers, 64 neuron, 25 epoch, adam
 
@@ -183,10 +189,10 @@ def select_random_parameters(n_param_sets):
     acti_hid = ["elu"] #All acti except for "exponential" because gives NA loss
     acti_out = ["softmax"] #All acti except for "exponential" because gives NA loss
     dropout = [0.15] #dropout 0.1 to 0.9
-    neurons = [64]
-    epochs = [18]
+    neurons = [128]
+    epochs = [5]
     optimizers = [SGD(lr=0.05, momentum=0.98)]
-
+    
     #Create dictionary of parameters
     para_dic = {"lay": layers, "acti_hid": acti_hid, 
                 "acti_out": acti_out, "neur": neurons, 
@@ -227,26 +233,25 @@ def create_model(X_train, X_val, y_train, y_val, lay, acti_hid, acti_out, neur, 
     #Create layers based on count with specified activations and dropouts
     for l in range(0,lay):
         model.add(BatchNormalization())
-        model.add(Dense(neur, activation=acti_hid))
+        model.add(Dense(neur, activation=acti_hid, activity_regularizer=L1L2(L1_REG)))
         
         #Add dropout except for last layer
         if l != lay - 1:
             model.add(Dropout(drop))
 
     #Add output layer
-    model.add(Dense(207, activation=acti_out)) 
+    model.add(Dense(206, activation=acti_out)) 
 
     #Define optimizer and loss
     model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
 
     #Define callbacks
     hist = History()
-    early_stop = EarlyStopping(monitor='val_loss', patience=5, mode='auto')
+    early_stop = EarlyStopping(monitor='val_loss', patience=2, mode='auto')
 
     #Fit and return model and loss history
-    model.fit(X_train, y_train, batch_size=8, epochs=epo, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
+    model.fit(X_train, y_train, batch_size=32, epochs=epo, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
     return model, hist
-
 
 
 #------------------------ K fold for given parameter lists ------------------------#
@@ -311,7 +316,7 @@ best_params, best_loss, best_model, best_hist = k_fold(X=X, y=y, n_fold=N_FOLD, 
 
 #Print best parameters
 print("Best params: ", best_params)
-#%%
+
 #Print loss history
 print("Best history: " , best_hist.history["loss"])
 t_loss_df = pd.DataFrame(best_hist.history["loss"])
@@ -323,11 +328,10 @@ if is_kaggle == False:
     plt.clf()
     sns.lineplot(data=loss_df)
 
-
 #Predict values for submit
 y_submit = best_model.predict(X_submit)
 
 #Create dataframe and CSV for submission
-submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
+submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit), axis=1)
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
 # %%
