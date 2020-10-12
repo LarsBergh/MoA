@@ -3,6 +3,10 @@
 #Loss on submit = 
 #Leaderboard approx position = 
 #Multilabel classification baseline model
+
+#%%
+print("test")
+#%%
 l1_reg = 0.00000001
 dropout_val = 0.2
 

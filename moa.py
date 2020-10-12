@@ -18,7 +18,7 @@ from tensorflow.keras.optimizers import SGD, Adam
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
 #print(device_lib.list_local_devices())
-tf.config.experimental.list_physical_devices('GPU')
+#tf.config.experimental.list_physical_devices('GPU')
 #print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 #------------------------ Relevant parameters ------------------------#
 #is kaggle
@@ -38,6 +38,10 @@ N_FOLD = 2
 
 L_SPEED = 0.001
 W_DECAY = 0.00001
+
+
+
+
 
 #------------------------ Loading data ------------------------#
 if is_kaggle == True:
@@ -73,8 +77,8 @@ X = X.iloc[:, 1:]
 y = y.iloc[:, 1:]
 
 #get subsets for submit data
-X_submit = X_submit.iloc[:, 1:]
 X_id_submit = X_submit.iloc[:, 0]
+X_submit = X_submit.iloc[:, 1:]
 print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape)
 
 #------------------------ Exporatory Data Analysis ------------------------#
@@ -168,11 +172,6 @@ X_submit = pd.concat([X_submit[main_cols], g_df_sub, c_df_sub],axis=1)
 X = encode_scale_df(df=X, cols=main_cols)
 X_submit = encode_scale_df(df=X_submit, cols=main_cols)
 print("after ecoding and scaling ", X.shape, y.shape)
-
-#%%
-#Creates a variable that encodes no target prediction as extra column
-#y_binary = (y.sum(axis=1) == 0).astype(int)
-#y = pd.concat([y, y_binary], axis=1)
 
 #------------------------ Ensure model reproducibility ------------------------
 #Start tensorflow session and set np and tensorflow seeds for this session
