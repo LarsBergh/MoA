@@ -74,7 +74,7 @@ acti_hid = ["elu"] #All acti except for "exponential" because gives NA loss
 acti_out = ["softmax"] #All acti except for "exponential" because gives NA loss
 dropout = [0.15] #dropout 0.1 to 0.9
 neurons = [64]
-epochs = [7]
+epochs = [50]
 optimizers = [SGD(lr=0.05, momentum=0.95)]
 
 #Create dictionary of the given parameters
@@ -214,7 +214,7 @@ def create_model(X_train, X_val, y_train, y_val, lay, acti_hid, acti_out, neur, 
             model.add(Dropout(drop))
 
     #Add output layer
-    model.add(Dense(206, activation=acti_out)) 
+    model.add(Dense(207, activation=acti_out)) 
 
     #Define optimizer and loss
     model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
@@ -318,8 +318,6 @@ X_submit = X_submit.iloc[:, 1:]
 
 print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape)
 
-
-
 #------------------------ Exporatory Data Analysis ------------------------#
 #Show distribution of amount of labels per row
 if is_kaggle == False:
@@ -327,7 +325,9 @@ if is_kaggle == False:
 print(y.sum(axis=1).value_counts().sort_index(axis=0))
 print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
 
-
+#Creates a variable that encodes no target prediction as extra column to dump excess probability
+y_binary = (y.sum(axis=1) == 0).astype(int)
+y = pd.concat([y, y_binary], axis=1)
 
 #------------------------ Encoding and scaling dataframe columns ------------------------#
 #Apply PCA on gene/cell columns of X and X_submit
@@ -386,6 +386,6 @@ if is_kaggle == False:
 y_submit = best_model.predict(X_submit)
 
 #Create dataframe and CSV for submission
-submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit), axis=1)
+submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
 # %%

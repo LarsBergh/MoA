@@ -1,3 +1,4 @@
+#%%
 # This Python 3 environment comes with many helpful analytics libraries installed
 # It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python
 # For example, here's several helpful packages to load
@@ -30,12 +31,12 @@ from tensorflow.python.client import device_lib
 #print(device_lib.list_local_devices())
 
 #------------------------ Loading data ------------------------#
-data_folder = "/kaggle/input/lish-moa/"
-output_folder = "/kaggle/working/"
+#data_folder = "/kaggle/input/lish-moa/"
+#output_folder = "/kaggle/working/"
 #https://www.codingforentrepreneurs.com/blog/install-tensorflow-gpu-windows-cuda-cudnn/
 #https://developer.nvidia.com/rdp/cudnn-download
-#data_folder = "data/"
-#output_folder = "output/"
+data_folder = "data/"
+output_folder = "output/"
 
 X = pd.read_csv(data_folder + "train_features.csv")
 y = pd.read_csv(data_folder + "train_targets_scored.csv")
