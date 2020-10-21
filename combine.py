@@ -1,15 +1,30 @@
 #%%
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the read-only "../input/" directory
+# For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory
+
+import os
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
+
 # You can write up to 5GB to the current directory (/kaggle/working/) that gets preserved as output when you create a version using "Save & Run All" 
 # You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current session
 import pandas as pd
 import numpy as np
 import tensorflow as tf
 import seaborn as sns
+from tensorflow.keras.callbacks import History, EarlyStopping
 from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, ActivityRegularization
 from tensorflow.keras import Sequential
 from tensorflow.keras.regularizers import l1, l2, L1L2
 from tensorflow.keras.optimizers import SGD
-from tensorflow.keras.losses import BinaryCrossentropy
 from sklearn.model_selection import train_test_split
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
@@ -17,15 +32,12 @@ from tensorflow.python.client import device_lib
 #print(device_lib.list_local_devices())
 
 #------------------------ Loading data ------------------------#
-is_kaggle = False
-if is_kaggle == True:
-    data_folder = "/kaggle/input/lish-moa/"
-    output_folder = "/kaggle/working/"
-    if os.path.exists("/kaggle/working/submission.csv"):
-        os.remove("/kaggle/working/submission.csv")
-else:
-    data_folder = "data/"
-    output_folder = "output/"
+#data_folder = "/kaggle/input/lish-moa/"
+#output_folder = "/kaggle/working/"
+#https://www.codingforentrepreneurs.com/blog/install-tensorflow-gpu-windows-cuda-cudnn/
+#https://developer.nvidia.com/rdp/cudnn-download
+data_folder = "data/"
+output_folder = "output/"
 
 X = pd.read_csv(data_folder + "train_features.csv")
 y = pd.read_csv(data_folder + "train_targets_scored.csv")
@@ -89,10 +101,6 @@ def encode_scale_df(df):
 X_submit = encode_scale_df(X_submit)
 X = encode_scale_df(X)
 
-#Creates a variable that encodes no target prediction as extra column
-#y_binary = (y.sum(axis=1) == 0).astype(int)
-#y = pd.concat([y, y_binary], axis=1)
-
 #------------------------ Splitting data ------------------------#
 #Train and validation data split
 X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
@@ -103,8 +111,6 @@ print("X_train, y_train shape: ", X_train.shape, y_train.shape)
 print("X_val, y_val shape: ", X_val.shape, y_val.shape)
 print("X_test, y_test shape: ", X_test.shape, y_test.shape)
 
-
-
 model = Sequential()
 model.add(Dense(64, activation='elu'))
 model.add(Dropout(0.15))
@@ -114,56 +120,17 @@ model.add(Dense(64, activation='elu'))
 model.add(Dense(206, activation='softmax')) 
 opti = SGD(lr=0.05, momentum=0.98)
 model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=4, epochs=25, validation_data=(X_val, y_val))
 
+#Define callbacks
+hist = History()
+early_stop = EarlyStopping(monitor='val_loss', patience=7, mode='auto')
+model.fit(X_train, y_train, batch_size=64, epochs=50, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
 #Get validation loss/acc
 results = model.evaluate(X_test, y_test, batch_size=1)
 
-#Predict on test set to get final results
-y_pred = model.predict(X_test)
+#Predict values for submit
 y_submit = model.predict(X_submit)
-
 #%%
-print(y_pred.shape)
-print(y_test.shape)
-#%%
-
-y_pred = model.predict(X_test)
-bce = BinaryCrossentropy()
-print("BCE before", bce(y_test, y_pred).numpy())
-
-#Loop over rows in y_df
-for i in range(y_pred.shape[0]):
-    #Print first 2 rows of y_predicted and y_true (y_test)
-    #print(y_pred[i])
-    #print(y_test.iloc[i, :].values)
-
-    #Find max value per row
-    max_val = y_pred[i][y_pred[i].argmax()]
-
-    #Find cutoff value 5% under argmax per row
-    per_diff = 7
-    cutoff = max_val - (max_val/100*per_diff) 
-    #print(max_val, max_diff, cutoff)
-    
-    #set rows lower than cutoff to 0 and higher than cutoff to argmax value
-    row = np.array(y_pred[i])
-    #row[row <= cutoff] = 0
-    row[row > cutoff] = max_val
-    #y_pred[i][y_pred[i].argmax()] = 1
-
-    #Change y_pred values
-    y_pred[i] = row
-
-bce = BinaryCrossentropy()
-print("BCE after", bce(y_test, y_pred).numpy())
-#%%
-
-
-
-#%%
-
 #Create dataframe and CSV for submission
 submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
-# %%

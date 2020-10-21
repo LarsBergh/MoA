@@ -15,19 +15,22 @@
 
 #%%
 #------------------------ Loading libraries ------------------------#
+from matplotlib import rcParams
 import random
 import pandas as pd
 import numpy as np
 import tensorflow as tf
 import seaborn as sns
+import matplotlib as m
 import matplotlib.pyplot as plt
+import sklearn as sk
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.decomposition import PCA
 from tensorflow.keras.callbacks import History, EarlyStopping
 from tensorflow.keras.layers import Dense, Dropout, LSTM, Activation, BatchNormalization
 from tensorflow.keras import Sequential
 from tensorflow.keras.regularizers import l1, l2, L1L2
-from tensorflow.keras.optimizers import SGD, Adam
+from tensorflow.keras.optimizers import SGD, Adam, RMSprop, Nadam, Adagrad
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
 
@@ -65,17 +68,17 @@ optimizers = ["adadelta", "adagrad", "adam", "adamax", "ftrl", "nadam", "rmsprop
 #"selu", softmax, 3, layers, 64 neuron, 25 epoch, adam
 
 #Apply grid search if true, random search if false
-APPLY_GRID = False
+APPLY_GRID = True
 N_RAND_MODELS = 1
 
 #Define lists with parameter for random/grid search
 layers = [3] #Layers 1 to 5
 acti_hid = ["elu"] #All acti except for "exponential" because gives NA loss
-acti_out = ["softmax"] #All acti except for "exponential" because gives NA loss
+acti_out = ["softmax"] #Softmax is only 
 dropout = [0.15] #dropout 0.1 to 0.9
 neurons = [64]
 epochs = [50]
-optimizers = [SGD(lr=0.05, momentum=0.95)]
+optimizers = [Adam()]
 
 #Create dictionary of the given parameters
 PARAM_DIC = {"lay": layers, "acti_hid": acti_hid, 
@@ -214,7 +217,7 @@ def create_model(X_train, X_val, y_train, y_val, lay, acti_hid, acti_out, neur, 
             model.add(Dropout(drop))
 
     #Add output layer
-    model.add(Dense(207, activation=acti_out)) 
+    model.add(Dense(206, activation=acti_out)) 
 
     #Define optimizer and loss
     model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
@@ -234,7 +237,6 @@ def k_fold(X, y, n_fold, params):
     #Split data into train and test. train will be splitted later in K-fold
     X, X_test, y, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE)
     print("X_train, X_test, y_train, y_test shape: ", X.shape, X_test.shape, y.shape, y_test.shape)
-
 
     best_loss = 100000
     best_params = {}
@@ -301,17 +303,17 @@ else:
     data_folder = "data/"
     output_folder = "output/"
 
-X= pd.read_csv(data_folder + "train_features.csv")
-y = pd.read_csv(data_folder + "train_targets_scored.csv")
+X_raw = pd.read_csv(data_folder + "train_features.csv")
+y_raw = pd.read_csv(data_folder + "train_targets_scored.csv")
 X_submit = pd.read_csv(data_folder + "test_features.csv")
 
 
 
 #------------------------ Splitting id & data columns ------------------------#
-print("X, y, X_submit shape before id remove: ", X.shape, y.shape, X_submit.shape)
-y_cols = y.columns
-X = X.iloc[:, 1:]
-y = y.iloc[:, 1:]
+print("X, y, X_submit shape before id remove: ", X_raw.shape, y_raw.shape, X_submit.shape)
+y_cols = y_raw.columns
+X = X_raw.iloc[:, 1:]
+y = y_raw.iloc[:, 1:]
 
 X_id_submit = X_submit.iloc[:, 0]
 X_submit = X_submit.iloc[:, 1:]
@@ -319,15 +321,32 @@ X_submit = X_submit.iloc[:, 1:]
 print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape)
 
 #------------------------ Exporatory Data Analysis ------------------------#
+#%%
 #Show distribution of amount of labels per row
 if is_kaggle == False:
-    sns.displot(y.sum(axis=1))
+    rcParams.update({'figure.autolayout': True})
+    target_counts = pd.concat([pd.Series([x for x in range(8)]), y.sum(axis=1).value_counts().sort_index(axis=0)], axis=1, keys=["targets per drug", "amount of rows"]).fillna(0)
+    plot = sns.barplot(data= target_counts, x="targets per drug", y="amount of rows")
+    plot.set_title('Amount of targets per drug')
+    for index, row in target_counts.iterrows():
+        plot.text(row.name,row["amount of rows"] + 40, int(row["amount of rows"]), color='black', ha="center")
+    plt.tight_layout()
+    plot.figure.savefig("figs/target_count_plot.jpg")
+
+
+
+#%% Print a few example targets
+for val in y_cols[1:6]:
+    print(val)
+
+#%%
+
 print(y.sum(axis=1).value_counts().sort_index(axis=0))
 print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
-
+#%%
 #Creates a variable that encodes no target prediction as extra column to dump excess probability
-y_binary = (y.sum(axis=1) == 0).astype(int)
-y = pd.concat([y, y_binary], axis=1)
+#y_binary = (y.sum(axis=1) == 0).astype(int)
+#y = pd.concat([y, y_binary], axis=1)
 
 #------------------------ Encoding and scaling dataframe columns ------------------------#
 #Apply PCA on gene/cell columns of X and X_submit
@@ -388,4 +407,15 @@ y_submit = best_model.predict(X_submit)
 #Create dataframe and CSV for submission
 submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
-# %%
+#%%
+#Print versions for "Language and Package section of report"
+print("np version: ", np.__version__)
+print("pd version: ", pd.__version__)
+print("sns version: ", sns.__version__)
+print("sk version: ", sk.__version__)
+print("tf version: ", tf.__version__)
+print("m version: ", m.__version__)
+
+#%%
+#Print the data of a few rows to show the dataset
+
