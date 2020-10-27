@@ -14,7 +14,6 @@ from sklearn.model_selection import train_test_split
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
 from tensorflow.python.client import device_lib
-#print(device_lib.list_local_devices())
 
 #------------------------ Loading data ------------------------#
 is_kaggle = False
@@ -44,10 +43,6 @@ print("X, y, X_submit shape before id remove: ", X.shape, y.shape, X_submit.shap
 y_cols = y.columns
 X = X.iloc[:, 1:]
 y = y.iloc[:, 1:]
-
-#if os.path.exists("/kaggle/working/submission.csv"):
- #   os.remove("/kaggle/working/submission.csv")
-
 
 #get subsets for submit data
 X_id_submit = X_submit.iloc[:, 0]
@@ -89,10 +84,7 @@ def encode_scale_df(df):
 X_submit = encode_scale_df(X_submit)
 X = encode_scale_df(X)
 
-#Creates a variable that encodes no target prediction as extra column
-#y_binary = (y.sum(axis=1) == 0).astype(int)
-#y = pd.concat([y, y_binary], axis=1)
-
+#%%
 #------------------------ Splitting data ------------------------#
 #Train and validation data split
 X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
@@ -102,8 +94,6 @@ X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=
 print("X_train, y_train shape: ", X_train.shape, y_train.shape)
 print("X_val, y_val shape: ", X_val.shape, y_val.shape)
 print("X_test, y_test shape: ", X_test.shape, y_test.shape)
-
-
 
 model = Sequential()
 model.add(Dense(64, activation='elu'))
@@ -121,46 +111,50 @@ results = model.evaluate(X_test, y_test, batch_size=1)
 
 #Predict on test set to get final results
 y_pred = model.predict(X_test)
+
+#Predict values for submit
 y_submit = model.predict(X_submit)
 
 #%%
-print(y_pred.shape)
-print(y_test.shape)
-#%%
+after_lis = []
 
 y_pred = model.predict(X_test)
-bce = BinaryCrossentropy()
-print("BCE before", bce(y_test, y_pred).numpy())
+bce_before = BinaryCrossentropy()
+bce_before = bce_before(y_test, y_pred).numpy()
+print("BCE before", bce_before)
 
-#Loop over rows in y_df
-for i in range(y_pred.shape[0]):
-    #Print first 2 rows of y_predicted and y_true (y_test)
-    #print(y_pred[i])
-    #print(y_test.iloc[i, :].values)
+for i, percentage in enumerate(range(-10, 15)):
+     
+        
+    #Loop over rows in y_df
+    for i in range(y_pred.shape[0]):
+        #Print first 2 rows of y_predicted and y_true (y_test)
+        #print(y_pred[i])
+        #print(y_test.iloc[i, :].values)
 
-    #Find max value per row
-    max_val = y_pred[i][y_pred[i].argmax()]
+        #Find max value per row
+        max_val = y_pred[i][y_pred[i].argmax()]
 
-    #Find cutoff value 5% under argmax per row
-    per_diff = 7
-    cutoff = max_val - (max_val/100*per_diff) 
-    #print(max_val, max_diff, cutoff)
-    
-    #set rows lower than cutoff to 0 and higher than cutoff to argmax value
-    row = np.array(y_pred[i])
-    #row[row <= cutoff] = 0
-    row[row > cutoff] = max_val
-    #y_pred[i][y_pred[i].argmax()] = 1
+        #Find cutoff value 5% under argmax per row
+        per_diff = percentage / 100
+        cutoff = max_val - (max_val*per_diff) 
+        #print(max_val, max_diff, cutoff)
+        
+        #set rows lower than cutoff to 0 and higher than cutoff to argmax value
+        row = np.array(y_pred[i])
+        #row[row <= cutoff] = 0
+        row[row > cutoff] = max_val
+        #y_pred[i][y_pred[i].argmax()] = 1
 
-    #Change y_pred values
-    y_pred[i] = row
+        #Change y_pred values
+        y_pred[i] = row
+        
 
-bce = BinaryCrossentropy()
-print("BCE after", bce(y_test, y_pred).numpy())
-#%%
+    bce = BinaryCrossentropy()
+    bce = bce(y_test, y_pred).numpy()
+    after_lis.append([bce_before, bce])
 
-
-
+print(pd.DataFrame(after_lis, columns=["before", "after"]))
 #%%
 
 #Create dataframe and CSV for submission
