@@ -71,7 +71,6 @@ print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
 #------------------------ Parameters ------------------------#
 #Encoding type --> "map", "dummy"
 ENC_TYPE = "map"
-<<<<<<< HEAD
 
 #Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
 SC_TYPE = "quantile_uniform"
@@ -139,70 +138,6 @@ def plot_scaled_df(df, scaler_type):
             count += 1
 
 plot_scaled_df(df=X, scaler_type=SC_TYPE)
-=======
-
-#Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
-SC_TYPE = "quantile_uniform"
-
-#------------------------ Encoding and scaling dataframe columns ------------------------#
-def scale_df(df, scaler_type):
-    df_other = df.iloc[:, :3]
-    df = df.iloc[:, 3:]
-    
-    #https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-plot-all-scaling-py
-    scaler = {
-        "standardize" : StandardScaler(), # gives values 0 mean and unit variance
-        "normalize" : MinMaxScaler(), # scales values between 0 and 1
-        "quantile_normal" : QuantileTransformer(output_distribution="normal"), #non-linear, maps probability density to uniform distribution
-        "quantile_uniform" : QuantileTransformer(output_distribution="uniform"), #matches values to gaussian distribution
-        "power": PowerTransformer(method="yeo-johnson"), # stabilizes variance, minimizes skewness, applies zero mean unit variance also
-        "robust" : RobustScaler() #scaling robust to outliers. removes median, scales data to IQR 
-    }
-
-    sc = scaler[scaler_type]
-    print("Scaler used: ", sc)
-    return pd.concat([df_other, pd.DataFrame(sc.fit_transform(df), columns=df.columns)], axis=1)
-
-def encode_df(df, encoder_type):
-    cols = ["cp_type", "cp_time", "cp_dose"]
-    enc = pd.DataFrame()
-
-    if encoder_type == "dummy":
-        enc = pd.get_dummies(df[cols], columns=cols)
-
-    elif encoder_type == "map":           
-        enc_type = df['cp_type'].map({"ctl_vehicle": 0, "trt_cp": 1})
-        enc_time = df['cp_time'].map({24: 0, 48: 0.5, 72: 1})
-        enc_dose = df['cp_dose'].map({'D1': 0, 'D2': 1})
-        enc = pd.concat([enc_type, enc_time, enc_dose], axis=1)
-
-    df = df.drop(cols, axis=1)
-
-    return pd.concat([enc, df],axis=1)
-
-#Scale and encode X_submit and X dataframe
-print("X before scaling it with", SC_TYPE, X)
-
-X_submit = scale_df(df=X_submit, scaler_type=SC_TYPE)
-X = scale_df(df=X, scaler_type=SC_TYPE)
-
-print("X after scaling it with", ENC_TYPE, X)
-
-X = encode_df(df=X, encoder_type=ENC_TYPE)
-X_submit = encode_df(df=X_submit, encoder_type=ENC_TYPE)
-
-print("X after encoding it with", ENC_TYPE, X)
-#%%
-# Create four polar axes and access them through the returned array
-fig, axs = plt.subplots(3,3, figsize=(20,20))
-count = 0
-fig.suptitle("Columns scaled with " + SC_TYPE, fontsize=22)
-for i in range(0, 3):
-    for j in range(0, 3):
-        axs[i, j].hist(x=X.loc[:, X.columns[count+ list(X.columns).index("g-0")]], bins=50)
-        axs[i, j].set_title("Distribution G-" + str(count))
-        count += 1
->>>>>>> 1af8e2f23b5a28801e0f985d41036753ce6904d7
 #%%
 #------------------------ Splitting data ------------------------#
 #Train and validation data split
