@@ -1,80 +1,17 @@
-#------------------------ YET TO SUBMIT ------------------------#
-#Loss on X_val, y_val = 0.0188
-#Loss on submit = 
-#Leaderboard approx position = 
-#Multilabel classification baseline model
 
-#%%
-print("test")
-#%%
-l1_reg = 0.00000001
-dropout_val = 0.2
-
-model = Sequential()
-model.add(Dense(128, activation='elu', activity_regularizer=L1L2(l1_reg)))
-model.add(Dropout(dropout_val))
-model.add(Dense(128, activation='elu', activity_regularizer=L1L2(l1_reg))) 
-model.add(Dropout(dropout_val))
-model.add(Dense(128, activation='elu', activity_regularizer=L1L2(l1_reg))) 
-model.add(Dense(207, activation='sigmoid')) 
-opti = SGD(lr=0.05, momentum=0.99)
-model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=8, epochs=50)
-
-#Get validation loss/acc
-results = model.evaluate(X_val, y_val, batch_size=1)
-
-#Predict on test set to get final results
-y_pred = model.predict(X_test)
-
-#Predict values for submit
-y_submit = model.predict(X_submit)
-
-#Loss on X_val, y_val = 0.0188
-#Loss on submit = 
-#Leaderboard approx position = 
-#Multilabel classification baseline model
-l1_reg = 0.0000001
-dropout_val = 0.15
-
-model = Sequential()
-model.add(Dense(64, activation='elu', activity_regularizer=L1L2(l1_reg)))
-model.add(Dropout(dropout_val))
-model.add(Dense(64, activation='elu', activity_regularizer=L1L2(l1_reg))) 
-model.add(Dropout(dropout_val))
-model.add(Dense(64, activation='elu', activity_regularizer=L1L2(l1_reg))) 
-model.add(Dense(207, activation='sigmoid')) 
-opti = SGD(lr=0.05, momentum=0.98)
-model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=8, epochs=50)
-
-#Get validation loss/acc
-results = model.evaluate(X_val, y_val, batch_size=1)
-
-#Predict on test set to get final results
-y_pred = model.predict(X_test)
-
-#Predict values for submit
-y_submit = model.predict(X_submit)
-
-
-#Loss on X_val, y_val = 0.0189
-#Loss on submit = 0,02058
-#Leaderboard approx position = 
-#Multilabel classification baseline model
 model = Sequential()
 model.add(Dense(64, activation='elu'))
 model.add(Dropout(0.15))
 model.add(Dense(64, activation='elu')) 
 model.add(Dropout(0.15))
 model.add(Dense(64, activation='elu')) 
-model.add(Dense(207, activation='softmax')) 
+model.add(Dense(206, activation='softmax')) 
 opti = SGD(lr=0.05, momentum=0.98)
 model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=4, epochs=50)
+model.fit(X_train, y_train, batch_size=4, epochs=25, validation_data=(X_val, y_val))
 
 #Get validation loss/acc
-results = model.evaluate(X_val, y_val, batch_size=1)
+results = model.evaluate(X_test, y_test, batch_size=1)
 
 #Predict on test set to get final results
 y_pred = model.predict(X_test)
@@ -83,110 +20,41 @@ y_pred = model.predict(X_test)
 y_submit = model.predict(X_submit)
 
 
+def create_model(X_train, X_val, y_train, y_val, lay, acti_hid, acti_out, neur, drop, epo, opti):
+    #Print model parameters
+    print("Creating model with:")
+    print("Activation hidden: ", acti_hid)
+    print("Activation output: ", acti_out)
+    print("Hidden layer count: ", lay)
+    print("Neuron count per layer: ", neur)
+    print("Dropout value: ", drop)
+    print("Epoch count: ", epo)
+    print("Optimizer: ", opti)
 
+    
+    #Create model
+    model = Sequential()
+    
+    #Create layers based on count with specified activations and dropouts
+    for l in range(0,lay):
+        model.add(BatchNormalization())
+        model.add(Dense(neur, activation=acti_hid, activity_regularizer=L1L2(L1_REG)))
+        
+        #Add dropout except for last layer
+        if l != lay - 1:
+            model.add(Dropout(drop))
 
+    #Add output layer
+    model.add(Dense(206, activation=acti_out)) 
 
-#Loss on X_val, y_val = 0.0190
-#Loss on submit = 
-#Leaderboard approx position = 
-#Multilabel classification baseline model
-model = Sequential()
-model.add(Dense(32, activation='elu')) 
-model.add(Dropout(0.2))
-model.add(Dense(32, activation='elu')) 
-model.add(Dropout(0.2))
-model.add(Dense(207, activation='softmax')) 
-opti = SGD(lr=0.1, momentum=0.95)
-model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=4, epochs=50)
+    #Define optimizer and loss
+    model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+    
+    #Define callbacks
+    hist = History()
+    early_stop = EarlyStopping(monitor='val_loss', patience=2, mode='auto')
 
-#Get validation loss/acc
-results = model.evaluate(X_val, y_val, batch_size=1)
-
-#Predict on test set to get final results
-y_pred = model.predict(X_test)
-
-#Predict values for submit
-y_submit = model.predict(X_submit)
-
-
-
-
-
-#Loss on X_val, y_val = 0.0195
-#Loss on submit = 
-#Leaderboard approx position = 
-#Multilabel classification baseline model
-model = Sequential()
-model.add(Dense(32, activation='elu')) 
-model.add(Dropout(0.2))
-model.add(Dense(32, activation='elu')) 
-model.add(Dropout(0.2))
-model.add(Dense(207, activation='softmax')) 
-opti = SGD(lr=0.1, momentum=0.95)
-model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=8, epochs=40)
-
-#Get validation loss/acc
-results = model.evaluate(X_val, y_val, batch_size=1)
-
-#Predict on test set to get final results
-y_pred = model.predict(X_test)
-
-#Predict values for submit
-y_submit = model.predict(X_submit)
-
-
-
-
-#Loss on X_val, y_val = 0.0201
-#Loss on submit = 
-#Leaderboard approx position = 
-#Multilabel classification baseline model
-model = Sequential()
-model.add(Dense(32, activation='elu')) 
-model.add(Dropout(0.2))
-model.add(Dense(32, activation='elu')) 
-model.add(Dropout(0.2))
-model.add(Dense(207, activation='softmax')) 
-opti = SGD(lr=0.1, momentum=0.95)
-model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=8, epochs=20)
-
-#Get validation loss/acc
-results = model.evaluate(X_val, y_val, batch_size=1)
-
-#Predict on test set to get final results
-y_pred = model.predict(X_test)
-
-#Predict values for submit
-y_submit = model.predict(X_submit)
-
-
-
-#------------------------ Submitted ------------------------#
-#Loss on X_val, y_val = 0.0211
-#Loss on submit = 0.02151
-#Leaderboard approx position = 1673
-#Multilabel classification baseline model
-model = Sequential()
-model.add(Dense(32, activation='elu')) 
-model.add(Dropout(0.2))
-model.add(Dense(32, activation='elu')) 
-model.add(Dropout(0.2))
-model.add(Dense(207, activation='sigmoid')) 
-opti = SGD(lr=0.1, momentum=0.95)
-model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=8, epochs=20)
-
-#Get validation loss/acc
-results = model.evaluate(X_val, y_val, batch_size=8)
-
-
-#
-Activation hidden:  elu
-Activation output:  selu
-Hidden layer count:  1
-Neuron count per layer:  32
-Dropout value:  0.2
-Epoch count:  3
+    #Fit and return model and loss history
+    model.fit(X_train, y_train, batch_size=64, epochs=epo, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
+    print(model.summary())
+    return model, hist
