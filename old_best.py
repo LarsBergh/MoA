@@ -5,20 +5,13 @@ import tensorflow as tf
 import tensorflow_addons as tfa
 import seaborn as sns
 import matplotlib.pyplot as plt
-<<<<<<< HEAD
 import kerastuner as kt
 from kerastuner.tuners import RandomSearch
-=======
->>>>>>> 1af8e2f23b5a28801e0f985d41036753ce6904d7
 from tensorflow.keras.layers import Dense, Dropout, AlphaDropout, Activation, ActivityRegularization, BatchNormalization
 from tensorflow.keras import Sequential
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.regularizers import l1, l2, L1L2
-<<<<<<< HEAD
 from tensorflow.keras.optimizers import SGD, Adam
-=======
-from tensorflow.keras.optimizers import SGD
->>>>>>> 1af8e2f23b5a28801e0f985d41036753ce6904d7
 from tensorflow_addons.optimizers import AdamW
 from tensorflow.keras.losses import BinaryCrossentropy
 from sklearn.model_selection import train_test_split
@@ -206,7 +199,6 @@ pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", ind
 
 #%%
 
-<<<<<<< HEAD
 
 
 
@@ -243,21 +235,6 @@ def create_model(lay, acti, neur):
             model.add(Dropout(0.15))
         model.add(Dense(neur, activation=acti))
 
-=======
-def create_model(lay, acti, neur):
-    model = Sequential()
-
-    for i in range(0,lay):
-        model.add(BatchNormalization())
-        #Add Alpha dropout (only works well with exponentials)
-        if acti=="elu":
-            model.add(AlphaDropout(0.2))
-        #Else add regular dropout
-        else:
-            model.add(Dropout(0.15))
-        model.add(Dense(neur, activation=acti))
-
->>>>>>> 1af8e2f23b5a28801e0f985d41036753ce6904d7
      
     model.add(Dense(206, activation='softmax')) 
     opti = AdamW(lr=0.001, weight_decay=0.0001)
@@ -285,7 +262,6 @@ submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
 
 #%%
-<<<<<<< HEAD
 model = Sequential()
 model.add(BatchNormalization())
 model.add(Dropout(0.2))
@@ -304,5 +280,3 @@ early_stop = EarlyStopping(monitor='val_loss', patience=1, mode='auto')
 model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
 model.fit(X_train, y_train, batch_size=4, epochs=25, validation_data=(X_val, y_val), callbacks=[early_stop])
  
-=======
->>>>>>> 1af8e2f23b5a28801e0f985d41036753ce6904d7
