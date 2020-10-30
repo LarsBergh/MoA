@@ -21,6 +21,8 @@ from tensorflow.keras import backend as K
 
 #------------------------ Loading data ------------------------#
 is_kaggle = False
+plot_graps = False
+
 if is_kaggle == True:
     data_folder = "/kaggle/input/lish-moa/"
     output_folder = "/kaggle/working/"
@@ -56,36 +58,80 @@ X_submit.drop("sig_id", axis=1, inplace=True)
 print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape)
 
 #------------------------ Exporatory Data Analysis ------------------------#
-#%%
-#Show distribution of amount of labels per row
-print(y.sum(axis=1).value_counts().sort_index(axis=0))
-print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
+#Show distribution of amount of labels per ROW
+def plot_sum_per_target_count(y):
+    
+    #Count amount of targets per row and sum by target count
+    label_per_row = y.sum(axis=1).value_counts().sort_index(axis=0)
+    print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
 
-#Show distribution of amount of labels per row
-if is_kaggle == False:
-    #rcParams.update({'figure.autolayout': True})
-    target_counts = pd.concat([pd.Series([x for x in range(8)]), y.sum(axis=1).value_counts().sort_index(axis=0)], axis=1, keys=["targets per drug", "amount of drugs"]).fillna(0)
-    plot = sns.barplot(data= target_counts, x="targets per drug", y="amount of drugs")
-    plot.set_title('Amount of targets per drug admission')
+    #Plot sum of label counts across all rows 
+    fig, axs = plt.subplots(1,1, figsize=(7,5))
+    target_counts = pd.concat([pd.Series([x for x in range(8)]), label_per_row], axis=1, keys=["targets per drug", "amount of drugs"]).fillna(0)
+    row_plot = sns.barplot(data= target_counts, x="targets per drug", y="amount of drugs")
+    row_plot.set_title('Amount of targets per drug admission')
+    
+    #Add values of bar chart on top of bars
     for index, row in target_counts.iterrows():
-        plot.text(row.name,row["amount of drugs"] + 40, int(row["amount of drugs"]), color='black', ha="center")
+        row_plot.text(row.name,row["amount of drugs"] + 40, int(row["amount of drugs"]), color='black', ha="center")
+    
+    #Adjust layout and save
     plt.tight_layout()
-    plot.figure.savefig("figs/target_count_plot.jpg")
+    col_plot.figure.savefig("figs/sum_per_target_count.jpg")
 
-#%%
+#Show distribution of amount of labels per COLUMN
+def plot_sum_per_target(y):
+
+    #Create df with label counts per column
+    count_target_df = pd.DataFrame(y.sum(axis=0).sort_values(ascending=False), columns=["target count"])
+    
+    #print top 50 targets as pecentage of total targets
+    tot_label = count_target_df["target count"].sum()
+    top_50_label = count_target_df["target count"][:50].sum()
+    print("Top 50 targets have " + str((top_50_label/tot_label)*100) + " percent of all labels")
+
+    #Sub
+    count_target_df_50 = count_target_df.iloc[:50,:]
+    count_target_df_50['target name'] = count_target_df_50.index
+    
+    #Plot target sum across all drug administrations
+    fig, axs = plt.subplots(1,1, figsize=(15,5))
+
+    col_plot = sns.barplot(data=count_target_df_50, x="target name", y="target count")
+    col_plot.set_title('Top 50 targets count across all drug admissions')
+    col_plot.set_xticklabels(col_plot.get_xticklabels(),rotation=45,ha="right",rotation_mode='anchor', fontsize=8)
+    count = 0
+    
+    #Add values of bar chart on top of bars
+    for index, row in count_target_df_50.iterrows():
+        col_plot.text(count,row["target count"] + 6, int(row["target count"]), color='black', ha="center")
+        count += 1
+
+    #Adjust layout and save
+    plt.tight_layout()
+    col_plot.figure.savefig("figs/sum_per_target.jpg")
+
+#Plots cell and gene distributions
 def plot_gene_cell_dist(df, scaler_type=None):
-    cols = ["g-0","g-175","g-363","g-599", 
-            "c-4", "c-33", "c-65", "c-84"]
+
+    # Get 4 random cell viability and 4 random gene expression cols
+    cols = ["g-0","g-175","g-363","g-599", "c-4", "c-33", "c-65", "c-84"]
+
     # Create four polar axes and access them through the returned array
     fig, axs = plt.subplots(2,4, figsize=(20,10))
-    count = 0
+
+    #Adjust plot title based on pre/post data set scaling
     if scaler_type != None:
         fig.suptitle("Columns scaled with " + SC_TYPE, fontsize=22)
     else:
         fig.suptitle("Gene expression and cell viability distributions", fontsize=22)
 
+    #Loop over plot grid
+    count = 0
     for i in range(0, 2):
         for j in range(0, 4):
+
+            #Color first and last four plots differently (seperate cell and gene by color)
             if count >= 4:
                 axs[i, j].hist(x=X.loc[:, cols[count]], bins=50, color="#E1812B")
             else:
@@ -93,13 +139,14 @@ def plot_gene_cell_dist(df, scaler_type=None):
 
             axs[i, j].set_title("Distribution " + cols[count])
             count += 1
+
+    #Adjust format of plot and save
     plt.tight_layout()
     fig.savefig("figs/genes_cells-dist.jpg")
 
-plot_gene_cell_dist(df=X)
+#Plots skew and kurtotis for gene and cell data
+def skew_kurtosis(df):
 
-#%%
-def plot_skew_kurtosis(df):
     #Calculate skewness and kurtosis
     kurtosis = X.loc[:,"g-0":].kurtosis(axis=0)
     skew = X.loc[:,"g-0":].skew(axis=0)
@@ -117,66 +164,52 @@ def plot_skew_kurtosis(df):
     
     #Create full skew, kurtosis dataframe
     skew_kurt_df = pd.concat([skew, skew_labeled, kurtosis, kurtosis_labeled], 
-                        keys=["Skew", "Skew labeled", "Kurtosis", "Kurtosis labelled"], axis=1)
+                        keys=["skewness", "skewness columns per group", "kurtosis", "kurtosis columns per group"], axis=1)
 
     #Split into cell and gene skew/kurtosis df
-    gene = skew_kurt_df.loc["g-0":"g-771", :]
-    cell = skew_kurt_df.loc["c-0":"c-99",:]
+    gene_df = skew_kurt_df.loc["g-0":"g-771", :]
+    cell_df = skew_kurt_df.loc["c-0":"c-99",:]
 
-    print(gene, cell)
+    return gene_df, cell_df
 
-    #Create skewness visual
+#Plot skew and kurtosis for gene/cell cols
+def plot_skew_kurtosis(df, g_c, s_k, color):
+
     fig, axs = plt.subplots(1,2, figsize=(10,5))
-    fig.suptitle("Skewness and kurtosis of gene and cell values", fontsize=22)
-    
-    axs[0].hist(x=gene["Skew"], bins=50, color="#E1812B")
-    axs[0].set_title("Gene skewness values")
+    axs[0].hist(x=df[s_k], bins=50, color=color)
+    axs[0].set_title(g_c + " " + s_k + " values")
+    axs[0].set_xlabel(s_k + " value")
+    axs[0].set_ylabel("Amount of " + g_c + " columns")
 
-    #print(gene["Skew labeled"].value_counts().values)
-    gene_bar = gene["Skew labeled"].value_counts().reset_index()
-    bar_skew = sns.barplot(data=gene_bar, x="index", y="Skew labeled", ax=axs[1], color="#E1812B")
+    bar = df[s_k + " columns per group"].value_counts().reset_index()
+    print(bar.columns)
+    bar_skew = sns.barplot(data=bar, x="index", y=s_k + " columns per group", ax=axs[1], color=color)
     bar_skew.set_xticklabels(bar_skew.get_xticklabels(),rotation=15,ha="right",rotation_mode='anchor')
-      
-    #axs[0, 1].(x= , , height=10000)
-    #axs[0, 1].set_title("Gene skewness categories")
+    axs[1].set_title(g_c + " " + s_k + " values")
+    axs[1].set_xlabel('')
+    plt.tight_layout()
+    fig.savefig("figs/"+ g_c + "_" + s_k + ".jpg")
 
-    #axs[i, j].hist(x=gene["Skew"], bins=50, color="#E1812B")
-    
-    #axs[i, j].hist(x=X.loc[:, cols[count]], bins=50, color="#3174A1")
+if plot_graps == True:
+    #Create histogram of 8 columns pre scaling
+    plot_gene_cell_dist(df=X)
 
-            #axs[i, j].set_title("Distribution " + cols[count])
+    #Plot target distributions across columns and with rows summed by target counts
+    plot_sum_per_target_count(y=y)
+    plot_sum_per_target(y=y)
 
-    #plt.tight_layout()
-    #fig.savefig("figs/genes_cells-dist.jpg")
+    #Get skew and kurtosis values for cell viability and gene expression
+    gene_df, cell_df = skew_kurtosis(df=X)
 
-plot_skew_kurtosis(df=X)
+    #Plot skew and kurtosis for gene expression and cell viability
+    plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="skewness", color="#3174A1")
+    plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="skewness", color="#E1812B")
+    plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="kurtosis", color="#3174A1")
+    plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="kurtosis", color="#E1812B")
 
-#%%
-
-
-bins = []
-labels = ['', '2-18', '18-35', '35-65', '65+']
-
-df['AgeRange'] = pd.cut(df['Age'], bins=bins, labels=names)
-
-
-
-
-
-
-
-print(kurtosis_gene.mean(), kurtosis_gene.median())
-
-
-kurtosis_cell = X.loc[:,"c-0":"c-99"].kurtosis(axis=1)
-skew_cell = X.loc[:,"c-0":"c-99"].skew(axis=1)
-
-
-
-#%%
 #------------------------ Parameters ------------------------#
 #Encoding type --> "map", "dummy"
-ENC_TYPE = "map"
+ENC_TYPE = "dummy"
 
 #Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
 SC_TYPE = "quantile_uniform"
@@ -186,7 +219,7 @@ def scale_df(df, scaler_type):
     df_other = df.iloc[:, :3]
     df = df.iloc[:, 3:]
     
-    #https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-plot-all-scaling-py
+    #https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-col_plot-all-scaling-py
     scaler = {
         "standardize" : StandardScaler(), # gives values 0 mean and unit variance
         "normalize" : MinMaxScaler(), # scales values between 0 and 1
@@ -202,21 +235,20 @@ def scale_df(df, scaler_type):
 
 def encode_df(df, encoder_type):
     cols = ["cp_type", "cp_time", "cp_dose"]
-    enc = pd.DataFrame()
 
+    #Encode columns as dummy variables
     if encoder_type == "dummy":
-        enc = pd.get_dummies(df[cols], columns=cols)
+        df = pd.concat([pd.get_dummies(df[cols], columns=cols), df],axis=1)
+        df = df.drop(cols, axis=1)
 
+    #Map values to encodable columns
     elif encoder_type == "map":           
-        enc_type = df['cp_type'].map({"ctl_vehicle": 0, "trt_cp": 1})
-        enc_time = df['cp_time'].map({24: 0, 48: 0.5, 72: 1})
-        enc_dose = df['cp_dose'].map({'D1': 0, 'D2': 1})
-        enc = pd.concat([enc_type, enc_time, enc_dose], axis=1)
+        df['cp_type'] = df['cp_type'].map({"ctl_vehicle": 0, "trt_cp": 1})
+        df['cp_time'] = df['cp_time'].map({24: 0, 48: 0.5, 72: 1})
+        df['cp_dose'] = df['cp_dose'].map({'D1': 0, 'D2': 1})
 
-    df = df.drop(cols, axis=1)
-
-    return pd.concat([enc, df],axis=1)
-
+    print("Encoder used: ", encoder_type)
+    return df
 
 print("X before scaling it with", SC_TYPE, X)
 
