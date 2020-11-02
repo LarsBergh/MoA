@@ -21,7 +21,7 @@ from tensorflow.keras import backend as K
 
 #------------------------ Loading data ------------------------#
 is_kaggle = False
-plot_graps = False
+plot_graps = True
 
 if is_kaggle == True:
     data_folder = "/kaggle/input/lish-moa/"
@@ -42,6 +42,9 @@ else:
 X = pd.read_csv(data_folder + "train_features.csv")
 y = pd.read_csv(data_folder + "train_targets_scored.csv")
 X_submit = pd.read_csv(data_folder + "test_features.csv")
+
+#Print few columns for report before scaling
+print(X.loc[[0,1,2,23810,23811],["sig_id", "cp_type", "cp_time", "cp_dose", "g-0", "c-0"]])
 
 #------------------------ Subsetting data ------------------------#
 #Create subsets for train data
@@ -77,7 +80,7 @@ def plot_sum_per_target_count(y):
     
     #Adjust layout and save
     plt.tight_layout()
-    col_plot.figure.savefig("figs/sum_per_target_count.jpg")
+    row_plot.figure.savefig("figs/sum_per_target_count.jpg")
 
 #Show distribution of amount of labels per COLUMN
 def plot_sum_per_target(y):
@@ -95,7 +98,7 @@ def plot_sum_per_target(y):
     count_target_df_50['target name'] = count_target_df_50.index
     
     #Plot target sum across all drug administrations
-    fig, axs = plt.subplots(1,1, figsize=(15,5))
+    fig, axs = plt.subplots(1,1, figsize=(15,7))
 
     col_plot = sns.barplot(data=count_target_df_50, x="target name", y="target count")
     col_plot.set_title('Top 50 targets count across all drug admissions')
@@ -152,8 +155,8 @@ def skew_kurtosis(df):
     skew = X.loc[:,"g-0":].skew(axis=0)
 
     #Split kurtosis and skew values into bins
-    bin_skew = [-np.inf, -1, -0.5, 0.5, 1, np.inf]
-    lab_skew = ['high skew left', 'low skew left', 'approx symmetric', 'low skew right', 'high skew right']
+    bin_skew = [-np.inf, -2, 2, np.inf]
+    lab_skew = ['skew left', 'normally distributed', 'skew right']
     
     bin_kurt = [-np.inf, -2, 2, np.inf]
     lab_kurt = ['platykurtic', 'mesokurtic', 'leptokurtic']
@@ -188,7 +191,51 @@ def plot_skew_kurtosis(df, g_c, s_k, color):
     axs[1].set_title(g_c + " " + s_k + " values")
     axs[1].set_xlabel('')
     plt.tight_layout()
-    fig.savefig("figs/"+ g_c + "_" + s_k + ".jpg")
+    img_path = "figs/"+ g_c + "_" + s_k + ".jpg"
+    fig.savefig(img_path)
+    return img_path
+
+
+#%%
+def combine_graphs(images):
+    #https://stackoverflow.com/questions/30227466/combine-several-images-horizontally-with-python
+    import sys
+    from PIL import Image
+
+    figs = [Image.open(x) for x in images]
+    widths, heights = zip(*(i.size for i in figs))
+
+    total_width = widths[0] * 2
+    max_height = heights[0] * 2
+
+    x_off = figs[0].size[0]
+    y_off = figs[0].size[1]
+
+    new_im = Image.new('RGB', (total_width, max_height))
+    count = 0
+
+    for im in figs:
+        if count == 0:
+            new_im.paste(im, (0,0))
+        elif count == 1:
+            new_im.paste(im, (x_off,0))
+        elif count == 2:
+            new_im.paste(im, (0,y_off))
+        elif count == 3:
+            new_im.paste(im, (x_off,y_off))
+        count += 1
+        
+    new_im.save('figs/total_skew_kurt.jpg')    
+    #fig.savefig('figs/total_skew_kurt.jpg')
+
+    fig = plt.figure(figsize=(11,5))
+    imgplot = plt.imshow(new_im)
+    fig.suptitle("Skewness and Kurtosis values for gene expression and cell viability columns" , fontsize=12.8)
+    plt.axis('off')
+    plt.show()
+
+combine_graphs(images=[path1, path2, path3, path4])
+#%%
 
 if plot_graps == True:
     #Create histogram of 8 columns pre scaling
@@ -202,11 +249,13 @@ if plot_graps == True:
     gene_df, cell_df = skew_kurtosis(df=X)
 
     #Plot skew and kurtosis for gene expression and cell viability
-    plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="skewness", color="#3174A1")
-    plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="skewness", color="#E1812B")
-    plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="kurtosis", color="#3174A1")
-    plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="kurtosis", color="#E1812B")
+    path1 = plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="skewness", color="#3174A1")
+    path2 = plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="skewness", color="#E1812B")
+    path3 = plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="kurtosis", color="#3174A1")
+    path4 = plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="kurtosis", color="#E1812B")
+    combine_graphs(images=[path1, path2, path3, path4])
 
+#%%
 #------------------------ Parameters ------------------------#
 #Encoding type --> "map", "dummy"
 ENC_TYPE = "dummy"
