@@ -1,4 +1,5 @@
 #%%
+import sys
 import pandas as pd
 import numpy as np
 import tensorflow as tf
@@ -21,7 +22,11 @@ from tensorflow.keras import backend as K
 
 #------------------------ Loading data ------------------------#
 is_kaggle = False
-plot_graps = True
+compute_baseline = True
+plot_graps = False
+print("Model settings:")
+print("Plot graphs: ", plot_graps)
+print("Compute baseline: ", compute_baseline)
 
 if is_kaggle == True:
     data_folder = "/kaggle/input/lish-moa/"
@@ -67,6 +72,7 @@ def plot_sum_per_target_count(y):
     #Count amount of targets per row and sum by target count
     label_per_row = y.sum(axis=1).value_counts().sort_index(axis=0)
     print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
+    print("% 0, 1, 2 labels: ", label_per_row[0]/sum(label_per_row),label_per_row[1]/sum(label_per_row),label_per_row[2]/sum(label_per_row))
 
     #Plot sum of label counts across all rows 
     fig, axs = plt.subplots(1,1, figsize=(7,5))
@@ -91,7 +97,9 @@ def plot_sum_per_target(y):
     #print top 50 targets as pecentage of total targets
     tot_label = count_target_df["target count"].sum()
     top_50_label = count_target_df["target count"][:50].sum()
+    bottom_50_label = count_target_df["target count"][-50:].sum()
     print("Top 50 targets have " + str((top_50_label/tot_label)*100) + " percent of all labels")
+    print("Bottom 50 targets have " + str((bottom_50_label/tot_label)*100) + " percent of all labels")
 
     #Sub
     count_target_df_50 = count_target_df.iloc[:50,:]
@@ -122,12 +130,6 @@ def plot_gene_cell_dist(df, scaler_type=None):
 
     # Create four polar axes and access them through the returned array
     fig, axs = plt.subplots(2,4, figsize=(20,10))
-
-    #Adjust plot title based on pre/post data set scaling
-    if scaler_type != None:
-        fig.suptitle("Columns scaled with " + SC_TYPE, fontsize=22)
-    else:
-        fig.suptitle("Gene expression and cell viability distributions", fontsize=22)
 
     #Loop over plot grid
     count = 0
@@ -195,8 +197,6 @@ def plot_skew_kurtosis(df, g_c, s_k, color):
     fig.savefig(img_path)
     return img_path
 
-
-#%%
 def combine_graphs(images):
     #https://stackoverflow.com/questions/30227466/combine-several-images-horizontally-with-python
     import sys
@@ -225,45 +225,15 @@ def combine_graphs(images):
             new_im.paste(im, (x_off,y_off))
         count += 1
         
-    new_im.save('figs/total_skew_kurt.jpg')    
-    #fig.savefig('figs/total_skew_kurt.jpg')
+    new_im.save('figs/total_skew_kurt.jpg')
 
-    fig = plt.figure(figsize=(11,5))
-    imgplot = plt.imshow(new_im)
-    fig.suptitle("Skewness and Kurtosis values for gene expression and cell viability columns" , fontsize=12.8)
-    plt.axis('off')
-    plt.show()
-
-combine_graphs(images=[path1, path2, path3, path4])
-#%%
-
-if plot_graps == True:
-    #Create histogram of 8 columns pre scaling
-    plot_gene_cell_dist(df=X)
-
-    #Plot target distributions across columns and with rows summed by target counts
-    plot_sum_per_target_count(y=y)
-    plot_sum_per_target(y=y)
-
-    #Get skew and kurtosis values for cell viability and gene expression
-    gene_df, cell_df = skew_kurtosis(df=X)
-
-    #Plot skew and kurtosis for gene expression and cell viability
-    path1 = plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="skewness", color="#3174A1")
-    path2 = plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="skewness", color="#E1812B")
-    path3 = plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="kurtosis", color="#3174A1")
-    path4 = plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="kurtosis", color="#E1812B")
-    combine_graphs(images=[path1, path2, path3, path4])
-
-#%%
-#------------------------ Parameters ------------------------#
+#------------------------ Encoding and scaling dataframe columns ------------------------#
 #Encoding type --> "map", "dummy"
 ENC_TYPE = "dummy"
 
 #Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
 SC_TYPE = "quantile_uniform"
 
-#------------------------ Encoding and scaling dataframe columns ------------------------#
 def scale_df(df, scaler_type):
     df_other = df.iloc[:, :3]
     df = df.iloc[:, 3:]
@@ -299,23 +269,69 @@ def encode_df(df, encoder_type):
     print("Encoder used: ", encoder_type)
     return df
 
-print("X before scaling it with", SC_TYPE, X)
 
-#Scaling values
-X_submit = scale_df(df=X_submit, scaler_type=SC_TYPE)
-X = scale_df(df=X, scaler_type=SC_TYPE)
+#------------------------ Model functions ------------------------#
+def create_baseline(X_train, y_train, X_val, y_val, X_test, y_test):
+    print("Creating baseline model....")
+    model = Sequential()
+    model.add(Dense(64, activation='relu'))
+    model.add(Dense(64, activation='relu')) 
+    model.add(Dense(206, activation='softmax')) 
+    model.compile(optimizer="adam", loss='binary_crossentropy', metrics=["binary_crossentropy"]) 
+    model.fit(X_train, y_train, batch_size=4, epochs=15, validation_data=(X_val, y_val))
+    results = model.evaluate(X_test, y_test, batch_size=1)
 
-print("X after scaling it with", ENC_TYPE, X)
+#=====================================================================================#
+#================================= Execute main code =================================#
+#=====================================================================================#
+
+#------------------------ Plotting of raw data ------------------------#
+if plot_graps == True:
+    print("Plotting data/label distribution  graphs")
+
+    #Create histogram of 8 columns pre scaling
+    plot_gene_cell_dist(df=X)
+
+    #Plot target distributions across columns and with rows summed by target counts
+    plot_sum_per_target_count(y=y)
+    plot_sum_per_target(y=y)
+
+    #Get skew and kurtosis values for cell viability and gene expression
+    gene_df, cell_df = skew_kurtosis(df=X)
+
+    #Plot skew and kurtosis for gene expression and cell viability
+    path1 = plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="skewness", color="#3174A1")
+    path2 = plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="skewness", color="#E1812B")
+    path3 = plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="kurtosis", color="#3174A1")
+    path4 = plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="kurtosis", color="#E1812B")
+    combine_graphs(images=[path1, path2, path3, path4])
+
+#------------------------ Scaling/Encoding X data ------------------------#
+#If baseline is not computed, use scaling scheme
+if compute_baseline == False:
+    print("Scaling gene expression and cell viability columns....")
+    
+    #Scaling values
+    print("X before scaling it with", SC_TYPE, X.iloc[:1,:10])
+    X_submit = scale_df(df=X_submit, scaler_type=SC_TYPE)
+    X = scale_df(df=X, scaler_type=SC_TYPE)
+    print("X after scaling it with", ENC_TYPE, X.iloc[:1,:10])
+
+else: 
+    print("Not scaling columns, due to baseline model parameter....")
 
 #Encoding numerical and categorical vars
+print("Encoding categorical variables....")
+
+print("X before encoding it with", ENC_TYPE, X.iloc[:1,:10])
 X = encode_df(df=X, encoder_type=ENC_TYPE)
 X_submit = encode_df(df=X_submit, encoder_type=ENC_TYPE)
+print("X after encoding it with", ENC_TYPE, X.iloc[:1,:10])
 
-print("X after encoding it with", ENC_TYPE, X)
 
-#%%
 #------------------------ Splitting data ------------------------#
 #Train and validation data split
+print("Splitting data....")
 X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
 X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=0)
 
@@ -323,6 +339,12 @@ X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=
 print("X_train, y_train shape: ", X_train.shape, y_train.shape)
 print("X_val, y_val shape: ", X_val.shape, y_val.shape)
 print("X_test, y_test shape: ", X_test.shape, y_test.shape)
+
+#------------------------ Creating models ------------------------#
+if create_baseline == True:
+    create_baseline(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test)
+    sys.exit()
+
 
 def build_model(hp):
     model = Sequential()
@@ -342,6 +364,9 @@ tuner = RandomSearch(
 tuner.search(X, y, epochs=5, validation_data=(X_val, y_val))
 models = tuner.get_best_models(num_models=2)
 tuner.results_summary()
+
+
+
 #%%
 y_pred1 = models[0].predict(X_test)
 y_pred2 = models[1].predict(X_test)
