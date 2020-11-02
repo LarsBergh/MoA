@@ -20,14 +20,30 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransfor
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
 
-#------------------------ Loading data ------------------------#
-is_kaggle = False
-compute_baseline = True
-plot_graps = False
-print("Model settings:")
+#------------------------ Model settings ------------------------#
+is_kaggle = False #Set to true if making upload to kaggle
+compute_baseline = False #Set to true to only compute baseline model without scaled variables. Does encode first 3 columns based on ENC_TYPE
+plot_graps = False #Set to true if plots should be created
+
+#Encoding type --> "map", "dummy"
+ENC_TYPE = "dummy"
+
+#Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
+SC_TYPE = "quantile_uniform"
+
+print("Printing model settings....")
 print("Plot graphs: ", plot_graps)
 print("Compute baseline: ", compute_baseline)
+print("Encoding type: ", ENC_TYPE)
+print("Scaling type: ", SC_TYPE)
 
+#------------------------ Loading data ------------------------#
+#Description of task	Predicting a receptor respons based on gene expression, cell viability, drug, dose, and treatment type
+#cp_type	        trt_cp (treatment), ctl_vehicle (control group)
+#cp_time	        treatment duration (24, 48, 72 hours)
+#cp_dose	        dose of drug (high, low)
+#c-	                cell viability data
+#g-	                gene expression data
 if is_kaggle == True:
     data_folder = "/kaggle/input/lish-moa/"
     output_folder = "/kaggle/working/"
@@ -37,22 +53,17 @@ else:
     data_folder = "data/"
     output_folder = "output/"
 
-#Description of task	Predicting a receptor respons based on gene expression, cell viability, drug, dose, and treatment type
-#cp_type	        trt_cp (treatment), ctl_vehicle (control group)
-#cp_time	        treatment duration (24, 48, 72 hours)
-#cp_dose	        dose of drug (high, low)
-#c-	                cell viability data
-#g-	                gene expression data
-
 X = pd.read_csv(data_folder + "train_features.csv")
 y = pd.read_csv(data_folder + "train_targets_scored.csv")
 X_submit = pd.read_csv(data_folder + "test_features.csv")
 
 #Print few columns for report before scaling
+print("Printing example rows of raw data....")
 print(X.loc[[0,1,2,23810,23811],["sig_id", "cp_type", "cp_time", "cp_dose", "g-0", "c-0"]])
 
 #------------------------ Subsetting data ------------------------#
 #Create subsets for train data
+print("Dropping id column....")
 print("X, y, X_submit shape before id remove: ", X.shape, y.shape, X_submit.shape)
 y_cols = y.columns
 
@@ -64,6 +75,11 @@ X_id_submit = X_submit["sig_id"]
 X_submit.drop("sig_id", axis=1, inplace=True)
 
 print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape)
+
+
+#=====================================================================================#
+#================================= Defining functions ================================#
+#=====================================================================================#
 
 #------------------------ Exporatory Data Analysis ------------------------#
 #Show distribution of amount of labels per ROW
@@ -228,12 +244,6 @@ def combine_graphs(images):
     new_im.save('figs/total_skew_kurt.jpg')
 
 #------------------------ Encoding and scaling dataframe columns ------------------------#
-#Encoding type --> "map", "dummy"
-ENC_TYPE = "dummy"
-
-#Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
-SC_TYPE = "quantile_uniform"
-
 def scale_df(df, scaler_type):
     df_other = df.iloc[:, :3]
     df = df.iloc[:, 3:]
@@ -266,9 +276,7 @@ def encode_df(df, encoder_type):
         df['cp_time'] = df['cp_time'].map({24: 0, 48: 0.5, 72: 1})
         df['cp_dose'] = df['cp_dose'].map({'D1': 0, 'D2': 1})
 
-    print("Encoder used: ", encoder_type)
     return df
-
 
 #------------------------ Model functions ------------------------#
 def create_baseline(X_train, y_train, X_val, y_val, X_test, y_test):
@@ -345,7 +353,45 @@ if create_baseline == True:
     create_baseline(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test)
     sys.exit()
 
+#------------------------ Predicting amount of targets ------------------------#
+#%%
+labels = y.sum(axis=1)
 
+X_train, X_val, y_train, y_val = train_test_split(X, labels, test_size=0.2, random_state=0)
+X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=0)
+
+print("Creating target prediction model....")
+model = Sequential()
+model.add(Dense(64, activation='relu'))
+model.add(Dense(64, activation='relu')) 
+model.add(Dense(64, activation='relu')) 
+model.add(Dense(1, activation='linear')) 
+model.compile(optimizer="adam", loss='mae', metrics=["mae"]) 
+
+early_stop = EarlyStopping(monitor='val_mae', patience=1, mode='auto')
+model.fit(X_train, y_train, batch_size=32, epochs=15, validation_data=(X_val, y_val), callbacks=early_stop)
+results = model.evaluate(X_test, y_test, batch_size=1)
+y_pred = model.predict(X_test)
+
+#%%
+test = np.where(np.array(y_compare['round_y_pred'].values).astype(int)==np.array(y_compare['y_true']).ravel())
+print(test)
+#%%
+print(np.array(y_compare['round_y_pred']).astype(int)) 
+print(np.array(y_compare['y_true']).ravel())
+#%%
+y_compare = pd.concat([pd.DataFrame(y_test.values), pd.DataFrame(y_pred)], axis=1, keys=["y_true", "y_pred"])
+y_compare["round_y_pred"] = y_compare["y_pred"].round(decimals=0)
+print(type(y_compare["y_true"]))
+print(y_compare["round_y_pred"].astype(int))
+#%%
+print(y_compare["y_true"].values[0], y_compare["round_y_pred"].values[0])
+
+#y_compare["y_true"] == y_compare["round_y_pred"]
+#%%
+
+
+#%%
 def build_model(hp):
     model = Sequential()
     model.add(Dense(units=hp.Int('units',min_value=32,max_value=512,step=32), activation='relu'))
