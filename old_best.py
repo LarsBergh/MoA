@@ -1,5 +1,6 @@
 #%%
 import sys
+import pickle
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -396,7 +397,7 @@ np.random.seed(RANDOM_STATE)
 tf.random.set_seed(RANDOM_STATE)
 sess = tf.compat.v1.Session(graph=tf.compat.v1.get_default_graph())
 tf.compat.v1.keras.backend.set_session(sess)
-
+#%%
 if create_baseline == True:
     create_baseline(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test)
     sys.exit()
@@ -410,14 +411,14 @@ model2.add(Dropout(0.2))
 model2.add(Dense(64, activation='selu')) 
 model2.add(BatchNormalization())
 model2.add(Dropout(0.2))
-model2.add(Dense(512, activation='relu')) 
+model2.add(Dense(64, activation='relu')) 
 model2.add(Dense(206, activation='softmax')) 
 
 opti = SGD(lr=0.05, momentum=0.98)
 early_stop = EarlyStopping(monitor='val_loss', patience=1, mode='auto')
 
 model2.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model2.fit(X_train, y_train, batch_size=4, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
+model2.fit(X_train, y_train, batch_size=16, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
  
 #Get validation loss/acc
 results = model2.evaluate(X_test, y_test, batch_size=1)
@@ -446,3 +447,130 @@ print("BCE on test set after row weights", calc_bce(y_test, y_matrix_x_weight))
 submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit), axis=1)
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
 #%%
+"""layers = np.array([x for x in range(1, 5)]) #Layers 1 to 5
+activations = ["relu", "sigmoid", "softmax", "softplus", "softsign", "tanh", "selu", "elu", "linear"] #All acti except for "exponential" because gives NA loss
+dropout = [x for x in np.round(np.arange(0.1, 1, 0.1),1)] #dropout 0.1 to 0.9
+neurons = [8, 16, 32]
+epochs = [1,2,3,4]
+optimizers = ["adadelta", "adagrad", "adam", "adamax", "ftrl", "nadam", "rmsprop", "sgd", SGD(lr=0.05, momentum=0.98),Adam(learning_rate=L_SPEED)]
+"""
+
+
+
+#%%
+import shutil
+shutil.rmtree('output/MoA target/') 
+
+
+def build_model(hp):
+    acti = ["relu", "selu", "elu", "linear"]
+    opti = ["Adam", "sgd", "adagrad"]
+    #Adam(hp.Choice('learning_rate',values=[1e-2, 1e-3, 1e-4]
+
+    model = Sequential()
+    for i in range(2, np.random.randint(low=2, high=4)):
+        model.add(Dense(units=hp.Int('neuron_hidden',min_value=32,max_value=512,step=32), activation=hp.Choice(name="activation_hidden", values=acti)))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.2))
+    model.add(Dense(206, activation='softmax'))                                    
+    model.compile(optimizer=hp.Choice(name="optimizer", values=opti),loss='binary_crossentropy',metrics=['binary_crossentropy'])
+    return model
+
+tuner = RandomSearch(
+    build_model,
+    objective='val_loss',
+    max_trials=5,
+    seed=RANDOM_STATE,
+    executions_per_trial=1,
+    directory='output',
+    project_name='MoA target')
+
+tuner.search(X, y, epochs=5, validation_data=(X_val, y_val))
+
+#%%
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.svm import LinearSVC
+
+classifier = OneVsRestClassifier(LinearSVC()).fit(X_train, y_train)
+lin_svc_pred = classifier.predict(X_val)
+
+#%%
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import log_loss
+
+import time
+start_time = time.time()
+
+forest = RandomForestClassifier(random_state=RANDOM_STATE)
+multi_target_forest = MultiOutputClassifier(forest, n_jobs=-1)
+predictions = multi_target_forest.fit(X_train, y_train).predict(X_val)
+print(log_loss(y_val, predictions))
+
+elapsed_time = time.time() - start_time
+print("Time elapsed: ", elapsed_time)
+
+#%%
+import pickle
+with open('output/RFpredictions.pickle', 'wb') as f:
+    pickle.dump(predictions, f)
+
+with open('output/RFpredictions.pickle', 'rb') as f:
+    pred_load = pickle.load(f)
+
+print(pred_load)
+
+
+#%%
+print(type(predictions))
+print(type(y_val.to_numpy()))
+#%%
+print(predictions, y_val)
+#%%
+print("BCE for LinearSVC: ", calc_bce(y_val, pd.DataFrame(predictions)))
+#%%
+
+
+
+#%%
+import time
+from sklearn import tree
+
+start_time = time.time()
+
+clf = tree.DecisionTreeRegressor()
+clf = clf.fit(X_train, y_train.iloc[:,:5])
+clf.predict(X_val)
+
+elapsed_time = time.time() - start_time
+print("Time elapsed: ", elapsed_time)
+
+#%%
+def build_ensemble_model(tuner, num_models, X_test):
+    models = tuner.get_best_models(num_models=3)
+    predictions = []
+    print(X_test.shape)
+    for model in models:
+        predictions.append(model.predict(X_test))
+    return predictions
+
+predictions = build_ensemble_model(tuner, 3, X_test)
+print(predictions)
+#%%
+model_1 = tuner.get_best_hyperparameters(num_trials = 1)[0]
+model_2 = tuner.get_best_hyperparameters(num_trials = 1)[1]
+model_3 = tuner.get_best_hyperparameters(num_trials = 1)[2]
+
+model = tuner.hypermodel.build(best_hps)
+y_pred model.predict(X_test)
+
+#%%
+print(models[0].predict(X_test))
+
+
+
+
+#%%
+y_pred1 = models[0].predict(X_test)
+y_pred2 = models[1].predict(X_test)
+print(y_pred1, y_pred2)
