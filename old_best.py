@@ -1,12 +1,15 @@
 #%%
 import sys
-import pandas as pd
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 import tensorflow_addons as tfa
 import seaborn as sns
+import matplotlib as m
 import matplotlib.pyplot as plt
+import sklearn as sk
 import kerastuner as kt
+
 from kerastuner.tuners import RandomSearch
 from tensorflow.keras.layers import Dense, Dropout, AlphaDropout, Activation, ActivityRegularization, BatchNormalization
 from tensorflow.keras import Sequential
@@ -20,16 +23,30 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransfor
 from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
 
+#------------------------ Package versions ------------------------#
+#Print versions for "Language and Package section of report"
+print("numpy version: ", np.__version__)
+print("pandas version: ", pd.__version__)
+print("tensorflow version: ", tf.__version__)
+print("tensorflow addons version: ", tfa.__version__)
+print("seaborn version: ", sns.__version__)
+print("matplotlib version: ", m.__version__)
+print("sklearn version: ", sk.__version__)
+print("kerastuner version: ", kt.__version__)
+
 #------------------------ Model settings ------------------------#
 is_kaggle = False #Set to true if making upload to kaggle
-compute_baseline = False #Set to true to only compute baseline model without scaled variables. Does encode first 3 columns based on ENC_TYPE
+compute_baseline = False #Set to true to ONLY compute baseline model without scaled variables. Does encode first 3 columns based on ENC_TYPE
 plot_graps = False #Set to true if plots should be created
 
 #Encoding type --> "map", "dummy"
-ENC_TYPE = "dummy"
+ENC_TYPE = "map"
 
 #Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
-SC_TYPE = "quantile_uniform"
+SC_TYPE = "robust"
+
+#Set random seed
+RANDOM_STATE = 0
 
 print("Printing model settings....")
 print("Plot graphs: ", plot_graps)
@@ -44,6 +61,7 @@ print("Scaling type: ", SC_TYPE)
 #cp_dose	        dose of drug (high, low)
 #c-	                cell viability data
 #g-	                gene expression data
+
 if is_kaggle == True:
     data_folder = "/kaggle/input/lish-moa/"
     output_folder = "/kaggle/working/"
@@ -75,7 +93,6 @@ X_id_submit = X_submit["sig_id"]
 X_submit.drop("sig_id", axis=1, inplace=True)
 
 print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape)
-
 
 #=====================================================================================#
 #================================= Defining functions ================================#
@@ -289,6 +306,33 @@ def create_baseline(X_train, y_train, X_val, y_val, X_test, y_test):
     model.fit(X_train, y_train, batch_size=4, epochs=15, validation_data=(X_val, y_val))
     results = model.evaluate(X_test, y_test, batch_size=1)
 
+#------------------------ Predicting row weights for prediction matrix ------------------------#
+def predict_row_weight(X, y, X_submit):
+    labels = y.sum(axis=1)
+    X_train_lin, X_val_lin, y_train_lin, y_val_lin = train_test_split(X, labels, test_size=0.2, random_state=RANDOM_STATE)
+    X_train_lin, X_test_lin, y_train_lin, y_test_lin = train_test_split(X_train_lin, y_train_lin, test_size=0.25, random_state=RANDOM_STATE)
+
+    print("Creating target prediction model....")
+    linear_model = Sequential()
+    for i in range(3):
+        linear_model.add(BatchNormalization())
+        linear_model.add(Dropout(0.2))
+        linear_model.add(Dense(64, activation='selu'))
+    linear_model.add(Dense(1, activation='linear')) 
+    linear_model.compile(optimizer="adam", loss='mae', metrics=["mae"]) 
+
+    early_stop = EarlyStopping(monitor='val_mae', patience=3, mode='auto')
+    linear_model.fit(X_train_lin, y_train_lin, batch_size=8, epochs=25, validation_data=(X_val_lin, y_val_lin), callbacks=early_stop)
+    linear_model.evaluate(X_test_lin, y_test_lin, batch_size=1)
+    y_pred_weight = linear_model.predict(X_test_lin).clip(min=0)
+    y_submit_weight = linear_model.predict(X_submit).clip(min=0)
+    return y_pred_weight, y_submit_weight
+
+#------------------------ Evaluation functions ------------------------#
+def calc_bce(y_true, y_pred):
+    bce = tf.keras.losses.BinaryCrossentropy()
+    return bce(y_true, y_pred).numpy()
+
 #=====================================================================================#
 #================================= Execute main code =================================#
 #=====================================================================================#
@@ -336,12 +380,11 @@ X = encode_df(df=X, encoder_type=ENC_TYPE)
 X_submit = encode_df(df=X_submit, encoder_type=ENC_TYPE)
 print("X after encoding it with", ENC_TYPE, X.iloc[:1,:10])
 
-
 #------------------------ Splitting data ------------------------#
 #Train and validation data split
 print("Splitting data....")
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=0)
-X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=0)
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE)
+X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=RANDOM_STATE)
 
 #Print resulting shapes of splitted datasets
 print("X_train, y_train shape: ", X_train.shape, y_train.shape)
@@ -349,187 +392,57 @@ print("X_val, y_val shape: ", X_val.shape, y_val.shape)
 print("X_test, y_test shape: ", X_test.shape, y_test.shape)
 
 #------------------------ Creating models ------------------------#
+np.random.seed(RANDOM_STATE)
+tf.random.set_seed(RANDOM_STATE)
+sess = tf.compat.v1.Session(graph=tf.compat.v1.get_default_graph())
+tf.compat.v1.keras.backend.set_session(sess)
+
 if create_baseline == True:
     create_baseline(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test)
     sys.exit()
 
-#------------------------ Predicting amount of targets ------------------------#
-#%%
-labels = y.sum(axis=1)
-
-X_train, X_val, y_train, y_val = train_test_split(X, labels, test_size=0.2, random_state=0)
-X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=0)
-
-print("Creating target prediction model....")
-model = Sequential()
-model.add(Dense(64, activation='relu'))
-model.add(Dense(64, activation='relu')) 
-model.add(Dense(64, activation='relu')) 
-model.add(Dense(1, activation='linear')) 
-model.compile(optimizer="adam", loss='mae', metrics=["mae"]) 
-
-early_stop = EarlyStopping(monitor='val_mae', patience=1, mode='auto')
-model.fit(X_train, y_train, batch_size=32, epochs=15, validation_data=(X_val, y_val), callbacks=early_stop)
-results = model.evaluate(X_test, y_test, batch_size=1)
-y_pred = model.predict(X_test)
-
-#%%
-test = np.where(np.array(y_compare['round_y_pred'].values).astype(int)==np.array(y_compare['y_true']).ravel())
-print(test)
-#%%
-print(np.array(y_compare['round_y_pred']).astype(int)) 
-print(np.array(y_compare['y_true']).ravel())
-#%%
-y_compare = pd.concat([pd.DataFrame(y_test.values), pd.DataFrame(y_pred)], axis=1, keys=["y_true", "y_pred"])
-y_compare["round_y_pred"] = y_compare["y_pred"].round(decimals=0)
-print(type(y_compare["y_true"]))
-print(y_compare["round_y_pred"].astype(int))
-#%%
-print(y_compare["y_true"].values[0], y_compare["round_y_pred"].values[0])
-
-#y_compare["y_true"] == y_compare["round_y_pred"]
-#%%
-
-
-#%%
-def build_model(hp):
-    model = Sequential()
-    model.add(Dense(units=hp.Int('units',min_value=32,max_value=512,step=32), activation='relu'))
-    model.add(Dense(206, activation='softmax'))                                    
-    model.compile(optimizer=Adam(hp.Choice('learning_rate',values=[1e-2, 1e-3, 1e-4])),loss='binary_crossentropy',metrics=['binary_crossentropy'])
-    return model
-
-tuner = RandomSearch(
-    build_model,
-    objective='binary_crossentropy',
-    max_trials=5,
-    executions_per_trial=1,
-    directory='output',
-    project_name='MoA target')
-
-tuner.search(X, y, epochs=5, validation_data=(X_val, y_val))
-models = tuner.get_best_models(num_models=2)
-tuner.results_summary()
-
-
-
-#%%
-y_pred1 = models[0].predict(X_test)
-y_pred2 = models[1].predict(X_test)
-print(y_pred1, y_pred2)
-
-#%%
-model = Sequential()
-model.add(BatchNormalization())
-model.add(Dropout(0.2))
-model.add(Dense(64, activation='selu'))
-model.add(BatchNormalization())
-model.add(Dropout(0.2))
-model.add(Dense(64, activation='selu')) 
-model.add(BatchNormalization())
-model.add(Dropout(0.2))
-model.add(Dense(512, activation='relu')) 
-model.add(Dense(206, activation='softmax')) 
+model2 = Sequential()
+model2.add(BatchNormalization())
+model2.add(Dropout(0.2))
+model2.add(Dense(64, activation='selu'))
+model2.add(BatchNormalization())
+model2.add(Dropout(0.2))
+model2.add(Dense(64, activation='selu')) 
+model2.add(BatchNormalization())
+model2.add(Dropout(0.2))
+model2.add(Dense(512, activation='relu')) 
+model2.add(Dense(206, activation='softmax')) 
 
 opti = SGD(lr=0.05, momentum=0.98)
 early_stop = EarlyStopping(monitor='val_loss', patience=1, mode='auto')
 
-model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=4, epochs=25, validation_data=(X_val, y_val), callbacks=[early_stop])
+model2.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
+model2.fit(X_train, y_train, batch_size=4, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
  
 #Get validation loss/acc
-results = model.evaluate(X_test, y_test, batch_size=1)
+results = model2.evaluate(X_test, y_test, batch_size=1)
 print(results)
-#Predict on test set to get final results
-y_pred = model.predict(X_test)
 
-#Predict values for submit
-y_submit = model.predict(X_submit)
+#Predict weights per row and label probabilities
+y_pred_weight, y_submit_weight = predict_row_weight(X, y, X_submit)
 
-#Create dataframe and CSV for submission
-submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
-pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
+y_submit_mat = model2.predict(X_submit)
+y_pred_mat = model2.predict(X_test)
 
-#%%
+y_submit = y_submit_mat * y_submit_weight
 
+#Cap values in the prediction matrix to 1
+y_matrix_x_weight = y_pred_mat*y_pred_weight
+print("Max before capping top values to 1: ", y_matrix_x_weight.max())
+y_matrix_x_weight[y_matrix_x_weight > 1] = 1
+print("Max after capping top values to 1: ", y_matrix_x_weight.max())
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def create_model(lay, acti, neur):
-    model = Sequential()
-
-    for i in range(0,lay):
-        model.add(BatchNormalization())
-        #Add Alpha dropout (only works well with exponentials)
-        if acti=="elu":
-            model.add(AlphaDropout(0.2))
-        #Else add regular dropout
-        else:
-            model.add(Dropout(0.15))
-        model.add(Dense(neur, activation=acti))
-
-     
-    model.add(Dense(206, activation='softmax')) 
-    opti = AdamW(lr=0.001, weight_decay=0.0001)
-    model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-    return model
-
-#Get original model --> 25 epoch, batch 4, elu, 64 neurons, 0.15 dropout
-
-elu_model = create_model(lay=2, acti="elu", neur=64)
-
-early_stop = EarlyStopping(monitor='val_loss', patience=2, mode='auto')   
-elu_model.fit(X_train, y_train, batch_size=64, epochs=25, validation_data=(X_val, y_val), callbacks=[early_stop])
-
-#Get validation loss/acc
-results = elu_model.evaluate(X_test, y_test, batch_size=1)
-
-#Predict on test set to get final results
-y_pred = elu_model.predict(X_test)
-
-#Predict values for submit
-y_submit = elu_model.predict(X_submit)
+#Calculate bce before and after transformation with weights
+print("BCE on test set before row weights", calc_bce(y_test, y_pred_mat))
+print("BCE on test set after row weights", calc_bce(y_test, y_pred_mat*y_pred_weight))
+print("BCE on test set after row weights", calc_bce(y_test, y_matrix_x_weight))
 
 #Create dataframe and CSV for submission
-submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit[:,:206]), axis=1)
+submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit), axis=1)
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
-
 #%%
-model = Sequential()
-model.add(BatchNormalization())
-model.add(Dropout(0.2))
-model.add(Dense(64, activation='selu'))
-model.add(BatchNormalization())
-model.add(Dropout(0.2))
-model.add(Dense(64, activation='selu')) 
-model.add(BatchNormalization())
-model.add(Dropout(0.2))
-model.add(Dense(512, activation='relu')) 
-model.add(Dense(206, activation='softmax')) 
-
-opti = SGD(lr=0.05, momentum=0.98)
-early_stop = EarlyStopping(monitor='val_loss', patience=1, mode='auto')
-
-model.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model.fit(X_train, y_train, batch_size=4, epochs=25, validation_data=(X_val, y_val), callbacks=[early_stop])
- 
