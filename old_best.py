@@ -443,6 +443,46 @@ print("BCE on test set before row weights", calc_bce(y_test, y_pred_mat))
 print("BCE on test set after row weights", calc_bce(y_test, y_pred_mat*y_pred_weight))
 print("BCE on test set after row weights", calc_bce(y_test, y_matrix_x_weight))
 
+#%%
+from sklearn.metrics import recall_score, precision_score, accuracy_score, f1_score
+
+def compare_prediction_matrices(y_true_matrix, y_predict_matrix, weights, score_type):
+    #Round weights and create binary matrix
+    round_weights = weights.round(decimals=0)
+    bi_pred = np.zeros(y_pred_mat.shape)
+   
+   #Loop over rows in prediction matrix
+    for row in range(y_predict_matrix.shape[0]):
+
+        #Get amount of targets per row
+        round_weight_row = int(round_weights[row])
+
+        #Get positions of X highest probability predictions. 
+        max_args_row = y_predict_matrix[row].argsort()[::-1][:round_weight_row]
+
+        #Set all X highest value indices per row to 1
+        for max_arg in max_args_row:
+            bi_pred[row][max_arg] = 1
+
+    #Micro recall is used 
+    mat1 = [[0,0,0,1],[0,0,0,1]]
+    mat2 = [[1,0,0,1],[0,0,0,1]]
+    print(accuracy_score(mat1, mat2))
+
+    print(accuracy_score(y_true_matrix, bi_pred))
+
+    #Recall: TP/(TP+FN) --> What percentage were true predictions compared to true pred + false pred
+    print(recall_score(y_true_matrix, bi_pred, average="micro")) #Micro to calculate individual contributions to recall, not classese average
+
+    #Precision: TP/(TP+FP) --> Of all positive predictions, how many correct 1/4 predictions is correct
+    print(precision_score(y_true_matrix, bi_pred, average="micro")) #Micro to calculate individual contributions to recall, not classese average
+    
+
+compare_prediction_matrices(y_true_matrix=y_test, y_predict_matrix=y_pred_mat, weights=y_pred_weight, score_type="accuracy")
+#Calculate F1, Accuracy, Recall, Precision
+print(y_matrix_x_weight.shape)
+print(y_test.shape)
+#%%
 #Create dataframe and CSV for submission
 submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit), axis=1)
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
