@@ -39,6 +39,7 @@ print("kerastuner version: ", kt.__version__)
 is_kaggle = False #Set to true if making upload to kaggle
 compute_baseline = False #Set to true to ONLY compute baseline model without scaled variables. Does encode first 3 columns based on ENC_TYPE
 plot_graps = False #Set to true if plots should be created
+pred_row_weight = True #If true, it recalculates row weights, if false it will try to load row weights.
 
 #Encoding type --> "map", "dummy"
 ENC_TYPE = "map"
@@ -54,6 +55,7 @@ print("Plot graphs: ", plot_graps)
 print("Compute baseline: ", compute_baseline)
 print("Encoding type: ", ENC_TYPE)
 print("Scaling type: ", SC_TYPE)
+print("Predict row weights: ", pred_row_weight)
 
 #------------------------ Loading data ------------------------#
 #Description of task	Predicting a receptor respons based on gene expression, cell viability, drug, dose, and treatment type
@@ -329,6 +331,38 @@ def predict_row_weight(X, y, X_submit):
     y_submit_weight = linear_model.predict(X_submit).clip(min=0)
     return y_pred_weight, y_submit_weight
 
+def create_model(X_train, X_val, y_train, y_val, X_test, y_test, param_dic):
+    #Print model parameters
+    print("Creating model with:")
+    print("Hidden layer count: ", param_dic["lay"])
+    print("Activation hidden: ", param_dic["acti_hid"])
+    print("Neuron count per layer: ", param_dic["neur"])
+    print("Dropout value: ", param_dic["drop"])
+    print("Optimizer: ", param_dic["opti"])
+
+    #Create model
+    model = Sequential()
+    
+    #Create layers based on count with specified activations and dropouts
+    for l in range(0,param_dic["lay"]):
+        model.add(BatchNormalization())
+        model.add(Dropout(param_dic["drop"]))
+        model.add(Dense(param_dic["neur"], activation=param_dic["acti_hid"]))            
+
+    #Add output layer
+    model.add(Dense(206, activation="softmax")) 
+
+    #Define optimizer and loss
+    model.compile(optimizer=param_dic["opti"], loss='binary_crossentropy', metrics=["acc"]) 
+    
+    #Define callbacks
+    early_stop = EarlyStopping(monitor='val_loss', patience=2, mode='auto')
+
+    #Fit and return model and loss history
+    model.fit(X_train, y_train, batch_size=16, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
+    model.evaluate(X_test, y_test, batch_size=1)
+    return model
+
 #------------------------ Evaluation functions ------------------------#
 def calc_bce(y_true, y_pred):
     bce = tf.keras.losses.BinaryCrossentropy()
@@ -401,47 +435,84 @@ tf.compat.v1.keras.backend.set_session(sess)
 if create_baseline == True:
     create_baseline(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test)
     sys.exit()
+#model_1_params = {"lay": 3, "acti_hid": "sigmoid", "neur":64, "drop": 0.2, "opti": SGD(lr=0.05, momentum=0.98)} #0.0171
+#model_1_params = {"lay": 4, "acti_hid": "sigmoid", "neur":128, "drop": 0.25, "opti": "nadam"} #0.0168
+#model_1_params = {"lay": 5, "acti_hid": "softplus", "neur":64, "drop": 0.2, "opti": SGD(lr=0.05, momentum=0.99)} #0.0167
 
+#model_1_params = {"lay": 4, "acti_hid": "softplus", "neur":90, "drop": 0.2, "opti": "nadam"} #0.0166
+#model_1_params = {"lay": 4, "acti_hid": "elu", "neur":80, "drop": 0.23, "opti": "nadam"} #0.0166
+#model_1_params = {"lay": 4, "acti_hid": "softplus", "neur":64, "drop": 0.2, "opti": "nadam"} #0.0165
+
+model_1_params = {"lay": 4, "acti_hid": "softplus", "neur":90, "drop": 0.2, "opti": "nadam"} #0.0166
+model_2_params = {"lay": 4, "acti_hid": "elu", "neur":80, "drop": 0.23, "opti": "nadam"} #0.0166
+model_3_params = {"lay": 4, "acti_hid": "softplus", "neur":64, "drop": 0.2, "opti": "nadam"} #0.0165
+
+#model_1_params = {"lay": 5, "acti_hid": "sigmoid", "neur":64, "drop": 0.25, "opti": "nadam"}
+#model_2_params = {"lay": 4, "acti_hid": "softplus", "neur":64, "drop": 0.25, "opti": SGD(lr=0.05, momentum=0.98)}
+#model_3_params = {"lay": 3, "acti_hid": "elu", "neur":128, "drop": 0.15, "opti": SGD(lr=0.04, momentum=0.96)}
+
+model_1 = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=model_1_params)
+model_2 = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=model_2_params)
+model_3 = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=model_3_params)
+
+av_pred = (model_1.predict(X_test) + model_2.predict(X_test) + model_3.predict(X_test)) / 3 
+av_pred_submit = (model_1.predict(X_submit) + model_2.predict(X_submit) + model_3.predict(X_submit)) / 3 
+
+#%%
+#Predict weights per row and label probabilities
+if pred_row_weight == False:
+    y_pred_weight, y_submit_weight = predict_row_weight(X, y, X_submit)
+    av_pred_submit = av_pred_submit * y_submit_weight
+    with open('output/row_weights.pickle', 'wb') as f:
+        pickle.dump(y_pred_weight, f)
+else:
+    with open('output/row_weights.pickle', 'rb') as f:
+        y_pred_weight = pickle.load(f)
+      
+#Cap values in the prediction matrix to 1
+y_matrix_x_weight = av_pred*y_pred_weight
+print("Max before capping top values to 1: ", y_matrix_x_weight.max())
+y_matrix_x_weight[y_matrix_x_weight > 1] = 1
+print("Max after capping top values to 1: ", y_matrix_x_weight.max())
+
+#Calculate bce before and after transformation with weights
+print("BCE on test set before row weights", calc_bce(y_test, av_pred))
+print("BCE on test set after row weights", calc_bce(y_test, av_pred*y_pred_weight))
+print("BCE on test set after row weights", calc_bce(y_test, y_matrix_x_weight))
+
+#Create dataframe and CSV for submission
+submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), av_pred_submit), axis=1)
+pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
+
+#%%
+
+#sigmoid
+acti = "softplus"
+neur = 64
 model2 = Sequential()
 model2.add(BatchNormalization())
 model2.add(Dropout(0.2))
-model2.add(Dense(64, activation='selu'))
+model2.add(Dense(neur, activation=acti))
 model2.add(BatchNormalization())
 model2.add(Dropout(0.2))
-model2.add(Dense(64, activation='selu')) 
+model2.add(Dense(neur, activation=acti))
 model2.add(BatchNormalization())
 model2.add(Dropout(0.2))
-model2.add(Dense(64, activation='relu')) 
+model2.add(Dense(neur, activation=acti))
 model2.add(Dense(206, activation='softmax')) 
 
 opti = SGD(lr=0.05, momentum=0.98)
 early_stop = EarlyStopping(monitor='val_loss', patience=1, mode='auto')
 
 model2.compile(optimizer=opti, loss='binary_crossentropy', metrics=["acc"]) 
-model2.fit(X_train, y_train, batch_size=16, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
+model2.fit(X_train, y_train, batch_size=8, epochs=60, validation_data=(X_val, y_val), callbacks=[early_stop])
  
 #Get validation loss/acc
 results = model2.evaluate(X_test, y_test, batch_size=1)
 print(results)
 
-#Predict weights per row and label probabilities
-y_pred_weight, y_submit_weight = predict_row_weight(X, y, X_submit)
 
-y_submit_mat = model2.predict(X_submit)
-y_pred_mat = model2.predict(X_test)
-
-y_submit = y_submit_mat * y_submit_weight
-
-#Cap values in the prediction matrix to 1
-y_matrix_x_weight = y_pred_mat*y_pred_weight
-print("Max before capping top values to 1: ", y_matrix_x_weight.max())
-y_matrix_x_weight[y_matrix_x_weight > 1] = 1
-print("Max after capping top values to 1: ", y_matrix_x_weight.max())
-
-#Calculate bce before and after transformation with weights
-print("BCE on test set before row weights", calc_bce(y_test, y_pred_mat))
-print("BCE on test set after row weights", calc_bce(y_test, y_pred_mat*y_pred_weight))
-print("BCE on test set after row weights", calc_bce(y_test, y_matrix_x_weight))
+#%%
 
 #%%
 from sklearn.metrics import recall_score, precision_score, accuracy_score, f1_score
@@ -465,9 +536,11 @@ def compare_prediction_matrices(y_true_matrix, y_predict_matrix, weights, score_
             bi_pred[row][max_arg] = 1
 
     #Micro recall is used 
-    mat1 = [[0,0,0,1],[0,0,0,1]]
-    mat2 = [[1,0,0,1],[0,0,0,1]]
-    print(accuracy_score(mat1, mat2))
+    true = [[0,0,0,1],[0,0,0,1]]
+    pred = [[1,0,0,1],[0,0,0,1]]
+    print(accuracy_score(true, pred))
+    print(recall_score(true, pred, average="macro"))
+    print(precision_score(true, pred, average="macro"))
 
     print(accuracy_score(y_true_matrix, bi_pred))
 
@@ -483,10 +556,7 @@ compare_prediction_matrices(y_true_matrix=y_test, y_predict_matrix=y_pred_mat, w
 print(y_matrix_x_weight.shape)
 print(y_test.shape)
 #%%
-#Create dataframe and CSV for submission
-submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), y_submit), axis=1)
-pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
-#%%
+
 """layers = np.array([x for x in range(1, 5)]) #Layers 1 to 5
 activations = ["relu", "sigmoid", "softmax", "softplus", "softsign", "tanh", "selu", "elu", "linear"] #All acti except for "exponential" because gives NA loss
 dropout = [x for x in np.round(np.arange(0.1, 1, 0.1),1)] #dropout 0.1 to 0.9
