@@ -1,5 +1,6 @@
 #%%
 import sys
+import random
 import pickle
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ import matplotlib.pyplot as plt
 import sklearn as sk
 import kerastuner as kt
 
+from os import path
 from kerastuner.tuners import RandomSearch
 from tensorflow.keras.layers import Dense, Dropout, AlphaDropout, Activation, ActivityRegularization, BatchNormalization
 from tensorflow.keras import Sequential
@@ -40,6 +42,8 @@ is_kaggle = False #Set to true if making upload to kaggle
 compute_baseline = False #Set to true to ONLY compute baseline model without scaled variables. Does encode first 3 columns based on ENC_TYPE
 plot_graps = False #Set to true if plots should be created
 pred_row_weight = True #If true, it recalculates row weights, if false it will try to load row weights.
+create_random_param_models = False #Create extra models
+amount_ensemble_models = 5
 
 #Encoding type --> "map", "dummy"
 ENC_TYPE = "map"
@@ -330,7 +334,38 @@ def predict_row_weight(X, y, X_submit):
     y_pred_weight = linear_model.predict(X_test_lin).clip(min=0)
     y_submit_weight = linear_model.predict(X_submit).clip(min=0)
     return y_pred_weight, y_submit_weight
+#%%
+#------------------------ FUNCTIONS - select random parameters  ------------------------#
+def select_random_parameters(n_param_sets):
+    #Define lists with parameter for random/grid search
+    layers = [3,4,5]
+    acti_hid = ["elu", "relu", "sigmoid", "softplus", "softsign"] 
+    dropout = [0.15, 0.20, 0.25]
+    neurons = [64, 96, 128]
+    optimizers = ["nadam", "adam", SGD(lr=0.05, momentum=0.95), SGD(lr=0.05, momentum=0.98), "rmsprop"]
 
+    #Create dictionary of the given parameters
+    param_dic = {"lay": layers, "acti_hid": acti_hid, 
+                "neur": neurons, "drop": dropout,
+                "opti": optimizers}
+    
+    #Create list for parameter sets
+    par_total_list = []
+
+    for i in range(n_param_sets):
+            
+        par_sub_list = {}
+
+        #Randomly select parameters from parameter lists
+        for key, parameters in param_dic.items():
+            par_sub_list[key] = random.choice(parameters)
+            
+        #Append dictionary of random parameters to list
+        par_total_list.append(par_sub_list)
+    
+    return par_total_list
+#%%
+#------------------------ FUNCTIONS - Modeling  ------------------------#
 def create_model(X_train, X_val, y_train, y_val, X_test, y_test, param_dic):
     #Print model parameters
     print("Creating model with:")
@@ -360,8 +395,8 @@ def create_model(X_train, X_val, y_train, y_val, X_test, y_test, param_dic):
 
     #Fit and return model and loss history
     model.fit(X_train, y_train, batch_size=16, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
-    model.evaluate(X_test, y_test, batch_size=1)
-    return model
+    loss = model.evaluate(X_test, y_test, batch_size=1)[0]
+    return model, loss
 
 #------------------------ Evaluation functions ------------------------#
 def calc_bce(y_true, y_pred):
@@ -431,11 +466,190 @@ np.random.seed(RANDOM_STATE)
 tf.random.set_seed(RANDOM_STATE)
 sess = tf.compat.v1.Session(graph=tf.compat.v1.get_default_graph())
 tf.compat.v1.keras.backend.set_session(sess)
-#%%
+
 if create_baseline == True:
     create_baseline(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test)
     sys.exit()
-#model_1_params = {"lay": 3, "acti_hid": "sigmoid", "neur":64, "drop": 0.2, "opti": SGD(lr=0.05, momentum=0.98)} #0.0171
+
+if create_random_param_models == True:
+    
+    #Create X amount of random search models
+    N_RAND_MODELS = 5
+
+    param_sets = select_random_parameters(n_param_sets=N_RAND_MODELS)
+
+    model_list = []
+
+    if path.exists(output_folder + 'random_models.pickle'):
+        print(len(model_list), " model already existed. Adding to existing models...")
+        with open(output_folder + 'random_models.pickle', 'rb') as f:
+            model_list = pickle.load(f)
+        model_list.append([params, loss])
+    else:
+        print("No models exist yet, creating model file...")
+
+    for params in param_sets:
+        is_unique = True
+        for model in model_list:
+            if params == model[0]:
+                is_unique = False
+                break
+        if is_unique:
+            model, loss = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=params)    
+            model_list.append([params, loss])
+
+    #Sort models based on loss
+    model_list.sort(key=lambda x: x[1])
+
+    #Save model parameters and losses
+    with open(output_folder + 'random_models.pickle', 'wb') as f:
+        pickle.dump(model_list, f)
+
+#Load model parameters and losses
+if is_kaggle == False:
+    with open(output_folder + 'random_models.pickle', 'rb') as f:
+        model_list = pickle.load(f)
+    print(len(model_list), " amount of models in model object...")
+    print(model_list)
+
+#%%
+#model_list.pop(-1)
+#for model in model_list:
+    #print(model[1])
+
+av_pred = np.zeros(y_test.shape)
+av_pred_submit = np.zeros((X_submit.shape[0], 206))
+
+if is_kaggle == False:
+    for model in model_list[:amount_ensemble_models]:
+        best_model = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=model[0])
+        av_pred += np.array(best_model[0].predict(X_test)/amount_ensemble_models)
+        av_pred_submit += np.array(best_model[0].predict(X_submit)/amount_ensemble_models)
+
+elif is_kaggle == True:
+    model_1_params = {'lay': 4, 'acti_hid': 'softplus', 'neur': 96, 'drop': 0.15, 'opti': 'adam'} 
+    model_2_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.2, 'opti': SGD(lr=0.05, momentum=0.95)} 
+    model_3_params = {'lay': 5, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.15, 'opti': 'adam'} 
+    model_4_params = {'lay': 4, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.1, 'opti': 'nadam'}
+    model_5_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.15, 'opti': 'adam'}
+    models = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
+
+    for model in models:
+        best_model = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=model)
+        av_pred += np.array(best_model[0].predict(X_test)/len(models))
+        av_pred_submit += np.array(best_model[0].predict(X_submit)/len(models))
+
+#Predict weights per row and label probabilities
+#%%
+def predict_row_weight(X, y, X_submit):
+    
+    #par_1 = {'lay': 3, 'acti_hid': 'softplus', 'neur': 64, 'drop': 0.2, 'opti': 'nadam'}
+    #par_2 = {'lay': 4, 'acti_hid': 'sigmoid', 'neur': 64, 'drop': 0.15, 'opti': 'adam'}
+    #par_3 = {'lay': 3, 'acti_hid': 'relu', 'neur': 92, 'drop': 0.25, 'opti': 'nadam'}
+    #par_4 = {'lay': 4, 'acti_hid': 'linear', 'neur': 64, 'drop': 0.2, 'opti': 'adam'}
+    #par_5 = {'lay': 3, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.25, 'opti': 'nadam'}
+    param_sets = select_random_parameters(n_param_sets=15)
+    y_pred_weights = []
+    y_submit_weights = []
+
+    for param_dic in param_sets:
+
+        labels = y.sum(axis=1)
+        X_train_lin, X_val_lin, y_train_lin, y_val_lin = train_test_split(X, labels, test_size=0.2, random_state=RANDOM_STATE)
+        X_train_lin, X_test_lin, y_train_lin, y_test_lin = train_test_split(X_train_lin, y_train_lin, test_size=0.25, random_state=RANDOM_STATE)
+
+        #Print model parameters
+        print("Creating row weight prediction with with:")
+        print("Hidden layer count: ", param_dic["lay"])
+        print("Activation hidden: ", param_dic["acti_hid"])
+        print("Neuron count per layer: ", param_dic["neur"])
+        print("Dropout value: ", param_dic["drop"])
+        print("Optimizer: ", param_dic["opti"])
+
+        #Create model
+        model = Sequential()
+        
+        #Create layers based on count with specified activations and dropouts
+        for l in range(0,param_dic["lay"]):
+            model.add(BatchNormalization())
+            model.add(Dropout(param_dic["drop"]))
+            model.add(Dense(param_dic["neur"], activation=param_dic["acti_hid"]))            
+
+        #Add output layer
+        model.add(Dense(1, activation="linear")) 
+
+        #Define optimizer and loss
+        model.compile(optimizer=param_dic["opti"], loss='mae', metrics=["mae"]) 
+        
+        #Define callbacks
+        early_stop = EarlyStopping(monitor='val_mae', patience=3, mode='auto')
+
+        #Fit and return model and loss history
+        model.fit(X_train_lin, y_train_lin, batch_size=16, epochs=40, validation_data=(X_val_lin, y_val_lin), callbacks=early_stop)
+        model.evaluate(X_test_lin, y_test_lin, batch_size=1)
+
+        y_pred_weights.append(model.predict(X_test_lin).clip(min=0))
+        y_submit_weights.append(model.predict(X_submit).clip(min=0))
+    
+    return y_pred_weights, y_submit_weights
+
+""" print("Creating target prediction model....")
+linear_model = Sequential()
+for i in range(3):
+    linear_model.add(BatchNormalization())
+    linear_model.add(Dropout(0.2))
+    linear_model.add(Dense(64, activation='selu'))
+linear_model.add(Dense(1, activation='linear')) 
+linear_model.compile(optimizer="adam", loss='mae', metrics=["mae"]) 
+
+early_stop = EarlyStopping(monitor='val_mae', patience=3, mode='auto')
+linear_model.fit(X_train_lin, y_train_lin, batch_size=8, epochs=25, validation_data=(X_val_lin, y_val_lin), callbacks=early_stop)
+linear_model.evaluate(X_test_lin, y_test_lin, batch_size=1)"""
+
+if pred_row_weight ==  True:
+    y_pred_weight, y_submit_weight = predict_row_weight(X=X, y=y, X_submit=X_submit)
+    with open(output_folder + 'row_weights.pickle', 'wb') as f:
+        pickle.dump(y_pred_weight, f)
+else:
+    with open(output_folder + 'row_weights.pickle', 'rb') as f:
+        y_pred_weight = pickle.load(f)
+
+#%%
+#Multiply row with weights
+best_BCE = 1
+for i in range(len(y_pred_weight)):
+    
+    av_pred_weighted = av_pred * y_pred_weight[i]
+    av_pred_submit_weighted = av_pred_submit * y_submit_weight[i]
+
+    #Cap values in the prediction matrix to 1
+    #print("Max before capping top values to 1: ", av_pred_weighted.max())
+    av_pred_weighted[av_pred_weighted > 1] = 1
+    av_pred_submit_weighted[av_pred_submit_weighted > 1] = 1
+    #print("Max after capping top values to 1: ", av_pred_weighted.max())
+
+    #Find weights with best Binary Cross Entropy on test set
+    curr_bce = calc_bce(y_test, av_pred_weighted)
+
+    if best_BCE > curr_bce:
+        print("new BCE set", best_BCE, curr_bce)
+        best_BCE = curr_bce
+        best_weights = y_pred_weight[i]
+        best_weights_submit = y_submit_weight[i]
+
+    #Calculate bce before and after transformation with weights
+    #print("BCE on test set before row weights", calc_bce(y_test, av_pred))
+    #print("BCE on test set after row weights", curr_bce)
+
+print("Best BCE on y_test set: ", calc_bce(y_test, av_pred * best_weights))
+best_submit = av_pred_submit * best_weights_submit
+#%%
+#Create dataframe and CSV for submission
+submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), best_submit), axis=1)
+pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
+#%%
+#print(model_list.sort(key=lambda x: x[2]))
+#model_1_params = {"lay": 3, "acti_hid": "sigmoid", "neur":64, "drop": 0.2, "opti": SGD(lr=0.05, momentum=0.98)}
 #model_1_params = {"lay": 4, "acti_hid": "sigmoid", "neur":128, "drop": 0.25, "opti": "nadam"} #0.0168
 #model_1_params = {"lay": 5, "acti_hid": "softplus", "neur":64, "drop": 0.2, "opti": SGD(lr=0.05, momentum=0.99)} #0.0167
 
@@ -443,8 +657,11 @@ if create_baseline == True:
 #model_1_params = {"lay": 4, "acti_hid": "elu", "neur":80, "drop": 0.23, "opti": "nadam"} #0.0166
 #model_1_params = {"lay": 4, "acti_hid": "softplus", "neur":64, "drop": 0.2, "opti": "nadam"} #0.0165
 
-model_1_params = {"lay": 4, "acti_hid": "softplus", "neur":90, "drop": 0.2, "opti": "nadam"} #0.0166
-model_2_params = {"lay": 4, "acti_hid": "elu", "neur":80, "drop": 0.23, "opti": "nadam"} #0.0166
+#model_1_params = {"lay": 4, "acti_hid": "softplus", "neur":90, "drop": 0.2, "opti": "nadam"} #0.0166
+#model_1_params = {"lay": 4, "acti_hid": "sigmoid", "neur":64, "drop": 0.2, "opti": "nadam"} #0.0166
+#model_1_params = {"lay": 3, "acti_hid": "sigmoid", "neur":64, "drop": 0.2, "opti": SGD(lr=0.05, momentum=0.98)}
+model_1_params = {"lay": 4, "acti_hid": "elu", "neur":80, "drop": 0.23, "opti": "nadam"} #0.0166
+model_2_params = {"lay": 5, "acti_hid": "softplus", "neur":64, "drop": 0.2, "opti": SGD(lr=0.05, momentum=0.99)} #0.0167
 model_3_params = {"lay": 4, "acti_hid": "softplus", "neur":64, "drop": 0.2, "opti": "nadam"} #0.0165
 
 #model_1_params = {"lay": 5, "acti_hid": "sigmoid", "neur":64, "drop": 0.25, "opti": "nadam"}
@@ -459,30 +676,7 @@ av_pred = (model_1.predict(X_test) + model_2.predict(X_test) + model_3.predict(X
 av_pred_submit = (model_1.predict(X_submit) + model_2.predict(X_submit) + model_3.predict(X_submit)) / 3 
 
 #%%
-#Predict weights per row and label probabilities
-if pred_row_weight == False:
-    y_pred_weight, y_submit_weight = predict_row_weight(X, y, X_submit)
-    av_pred_submit = av_pred_submit * y_submit_weight
-    with open('output/row_weights.pickle', 'wb') as f:
-        pickle.dump(y_pred_weight, f)
-else:
-    with open('output/row_weights.pickle', 'rb') as f:
-        y_pred_weight = pickle.load(f)
-      
-#Cap values in the prediction matrix to 1
-y_matrix_x_weight = av_pred*y_pred_weight
-print("Max before capping top values to 1: ", y_matrix_x_weight.max())
-y_matrix_x_weight[y_matrix_x_weight > 1] = 1
-print("Max after capping top values to 1: ", y_matrix_x_weight.max())
 
-#Calculate bce before and after transformation with weights
-print("BCE on test set before row weights", calc_bce(y_test, av_pred))
-print("BCE on test set after row weights", calc_bce(y_test, av_pred*y_pred_weight))
-print("BCE on test set after row weights", calc_bce(y_test, y_matrix_x_weight))
-
-#Create dataframe and CSV for submission
-submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), av_pred_submit), axis=1)
-pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
 
 #%%
 
