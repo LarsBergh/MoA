@@ -1,3 +1,4 @@
+#%%
 import sys
 import random
 import pickle
@@ -43,9 +44,10 @@ plot_graps = False #Set to true if plots should be created
 pred_row_weight = False #If true, it recalculates row weights, if false it will try to load row weights.
 create_random_param_models = False #Create extra models instead of using existing models
 use_preset_params = True
-amount_ensemble_models = 5 #Define how many out of the best models should be used in ensemble
-amount_ensemble_weights = 3
-
+n_ensemble_models = 5 #Define how many out of the best models should be used in ensemble
+n_ensemble_weights = 3
+N_RAND_MODELS = 1
+#%%
 #Encoding type --> "map", "dummy"
 ENC_TYPE = "map"
 
@@ -362,7 +364,8 @@ def select_random_parameters(n_param_sets):
             par_sub_list[key] = random.choice(parameters)
             
         #Append dictionary of random parameters to list
-        par_total_list.append(par_sub_list)
+        if par_sub_list not in par_total_list:
+            par_total_list.append(par_sub_list)
     
     return par_total_list
 
@@ -395,16 +398,115 @@ def create_model(X_train, X_val, y_train, y_val, X_test, y_test, param_dic):
     early_stop = EarlyStopping(monitor='val_loss', patience=2, mode='auto')
 
     #Fit and return model and loss history
-    model.fit(X_train, y_train, batch_size=16, epochs=2, validation_data=(X_val, y_val), callbacks=[early_stop])
+    model.fit(X_train, y_train, batch_size=16, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
     loss = model.evaluate(X_test, y_test, batch_size=1)[0]
     return model, loss
 
-#Predict weights per row and label probabilities
-def predict_row_weight(X, y, X_submit, n_param_sets=None, param_sets=None):
-    param_sets = []
-    if n_param_sets != None:
-        param_sets = select_random_parameters(n_param_sets=n_param_sets)
+def create_more_random_models(n_rand_models):
+    rand_model_path = output_folder + 'random_models.pickle'
+
+    param_sets = select_random_parameters(n_param_sets=n_rand_models)
+
+    model_list = []
+
+    #Save randomly generated models
+    if path.exists(rand_model_path):
+        
+        with open(rand_model_path, 'rb') as f:
+            model_list = pickle.load(f)
+        print(len(model_list), " model already existed. Adding to existing models...")
+    else:
+        print("No models exist yet, creating model file...")
+
+    #Loop over created param sets and create new model if param combination does not exist
+    for params in param_sets:
+        if params not in [row[0] for row in model_list]:
+            model, loss = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=params)    
+            model_list.append([params, loss])
+
+    #Sort models based on loss
+    model_list.sort(key=lambda x: x[1])
+
+    #Save model parameters and losses
+    with open(rand_model_path, 'wb') as f:
+        pickle.dump(model_list, f)
+
+def create_model_ensemble(use_preset_params, model_list, n_ensemble_models):
+    #Define matrices for the average target predictions (for testing and submit)
+    av_pred = np.zeros(y_test.shape)
+    av_pred_submit = np.zeros((X_submit.shape[0], 206))
+
+    #Set of current best parameters
+    if use_preset_params == True:
+        model_1_params = {'lay': 4, 'acti_hid': 'softplus', 'neur': 96, 'drop': 0.15, 'opti': 'adam'} 
+        model_2_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.2, 'opti': SGD(lr=0.05, momentum=0.95)} 
+        model_3_params = {'lay': 5, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.15, 'opti': 'adam'} 
+        model_4_params = {'lay': 4, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.1, 'opti': 'nadam'}
+        model_5_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.15, 'opti': 'adam'}
+        models = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
     
+    else:
+        models = [row[0] for row in model_list][:n_ensemble_models]
+    
+    #For each set of parameters, create a model and make an average prediction across all ensemble models
+    for model in models:
+        best_model, best_loss = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=model)
+        av_pred += np.array(best_model.predict(X_test)/n_ensemble_models)
+        av_pred_submit += np.array(best_model.predict(X_submit)/n_ensemble_models)
+
+    return av_pred, av_pred_submit
+
+def calc_average_row_weight(av_pred, av_pred_submit, y_pred_weight, y_submit_weight, n_ensemble_weights):
+    #Find best binary cross-entropy loss with various predicted weight matrices
+    weight_bce = []
+
+    for i in range(len(y_pred_weight)):
+
+        #Calculate weighted predictions for each predicted weight array
+        av_pred_weighted = av_pred * y_pred_weight[i]
+        av_pred_submit_weighted = av_pred_submit * y_submit_weight[i]
+
+        #Cap values in the prediction matrix to 1
+        av_pred_weighted[av_pred_weighted > 1] = 1
+        av_pred_submit_weighted[av_pred_submit_weighted > 1] = 1
+
+        #Find weights with best Binary Cross Entropy on test set
+        current_bce = calc_bce(y_test, av_pred_weighted)
+        weight_bce.append([y_pred_weight[i], current_bce, param_sets[i], y_submit_weight[i]])
+
+        #Calculate bce before and after transformation with weights
+        print("BCE on test set before row weights", calc_bce(y_test, av_pred))
+        print("BCE on test set after row weights", current_bce)
+
+    weight_bce.sort(key=lambda x: x[1])
+
+    #Calculate average row weight across best performing weight arrays
+    weight_average, weight_average_submit = 0, 0
+    for i in range(n_ensemble_weights):
+        weight_average += (weight_bce[i][0]/n_ensemble_weights)
+        weight_average_submit += (weight_bce[i][3]/n_ensemble_weights)
+
+    return weight_average, weight_average_submit
+
+def create_predict_row_params(use_preset_params, n_param_sets):
+    
+    param_dic = []
+    
+    #If true, use some predefined parameters that have been found to work
+    if use_preset_params == True:
+        param_1 = {'lay': 4, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'}
+        param_2 = {'lay': 3, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.25, 'opti': 'adam'}
+        param_3 = {'lay': 4, 'acti_hid': 'elu', 'neur': 128, 'drop': 0.15, 'opti': 'adam'}
+        param_dic = [param_1, param_2, param_3]
+
+    #if you should not use pre-set parameters, generate random parameter sets
+    else:
+        param_dic = select_random_parameters(n_param_sets=n_param_sets)
+   
+    return param_dic
+
+#Predict weights per row and label probabilities
+def predict_row_weight(X, y, X_submit, param_sets):    
     y_pred_weights = []
     y_submit_weights = []
 
@@ -441,7 +543,7 @@ def predict_row_weight(X, y, X_submit, n_param_sets=None, param_sets=None):
         early_stop = EarlyStopping(monitor='val_mae', patience=3, mode='auto')
 
         #Fit and return model and loss history
-        model.fit(X_train_lin, y_train_lin, batch_size=16, epochs=2, validation_data=(X_val_lin, y_val_lin), callbacks=early_stop)
+        model.fit(X_train_lin, y_train_lin, batch_size=16, epochs=25, validation_data=(X_val_lin, y_val_lin), callbacks=early_stop)
         model.evaluate(X_test_lin, y_test_lin, batch_size=1)
 
         y_pred_weights.append(model.predict(X_test_lin).clip(min=0))
@@ -522,43 +624,12 @@ if create_baseline == True:
     create_baseline(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test)
     sys.exit()
 
+#Create extra randomly generated models to add to saved models object for later selection
 if create_random_param_models == True:
-    
-    #Create X amount of random search models
-    N_RAND_MODELS = 5
+    create_more_random_models(n_rand_models=N_RAND_MODELS)
 
-    param_sets = select_random_parameters(n_param_sets=N_RAND_MODELS)
-
-    model_list = []
-
-    if path.exists(output_folder + 'random_models.pickle'):
-        print(len(model_list), " model already existed. Adding to existing models...")
-
-        with open(output_folder + 'random_models.pickle', 'rb') as f:
-            model_list = pickle.load(f)
-        model_list.append([params, loss])
-    else:
-        print("No models exist yet, creating model file...")
-
-    for params in param_sets:
-        is_unique = True
-
-        for model in model_list:
-
-            if params == model[0]:
-                is_unique = False
-                break
-
-        if is_unique:
-            model, loss = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=params)    
-            model_list.append([params, loss])
-
-    #Sort models based on loss
-    model_list.sort(key=lambda x: x[1])
-
-    #Save model parameters and losses
-    with open(output_folder + 'random_models.pickle', 'wb') as f:
-        pickle.dump(model_list, f)
+#Create en ensemble prediction matrix (average matrix) based on the n_ensemble_models amount of models
+model_list = []
 
 #Load model parameters and losses
 if is_kaggle == False:
@@ -567,84 +638,20 @@ if is_kaggle == False:
     print(len(model_list), " amount of models in model object...")
     print("Models in model list: ", model_list)
 
-#%%
-#Define matrices for the average target predictions (for testing and submit)
-av_pred = np.zeros(y_test.shape)
-av_pred_submit = np.zeros((X_submit.shape[0], 206))
+#Create ensemble model with either pre-sets or loaded models
+av_pred, av_pred_submit = create_model_ensemble(use_preset_params=use_preset_params, model_list=model_list, n_ensemble_models=n_ensemble_models)
 
-#If not uploading to kaggle, get the best models from the model loading
-if use_preset_params == False:
-    for model in model_list[:amount_ensemble_models]:
-        best_model = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=model[0])
-        av_pred += np.array(best_model[0].predict(X_test)/amount_ensemble_models)
-        av_pred_submit += np.array(best_model[0].predict(X_submit)/amount_ensemble_models)
+#Create parameters for row target amount prediction (random parameters or pre-set)
+param_dic = create_predict_row_params(use_preset_params=use_preset_params, n_param_sets=15)
 
-    #If row weight predictions is true, calculate X sets of parameters
-    if pred_row_weight ==  True:
-         y_pred_weight,  y_submit_weight, param_sets = predict_row_weight(X=X, y=y, X_submit=X_submit, n_param_sets=15)
-        with open(output_folder + 'row_weights.pickle', 'wb') as f:
-            pickle.dump(y_pred_weight, f)
-    else:
-        with open(output_folder + 'row_weights.pickle', 'rb') as f:
-            y_pred_weight = pickle.load(f)
+#Use parameters to create row weight arrays for data and submit
+y_pred_weight, y_submit_weight, param_sets = predict_row_weight(X=X, y=y, X_submit=X_submit, param_sets=param_dic)
 
-#If uploading to kaggle, use some good predefined parameter sets for training model and prediction target counts
-elif use_preset_params == True:
-    model_1_params = {'lay': 4, 'acti_hid': 'softplus', 'neur': 96, 'drop': 0.15, 'opti': 'adam'} 
-    model_2_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.2, 'opti': SGD(lr=0.05, momentum=0.95)} 
-    model_3_params = {'lay': 5, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.15, 'opti': 'adam'} 
-    model_4_params = {'lay': 4, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.1, 'opti': 'nadam'}
-    model_5_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.15, 'opti': 'adam'}
-    models = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
-
-    #For each set of parameters, train a model and create average prediction matrix
-    for model in models:
-        best_model = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=model)
-        av_pred += np.array(best_model[0].predict(X_test)/len(models))
-        av_pred_submit += np.array(best_model[0].predict(X_submit)/len(models))
-
-    param_1 = {'lay': 4, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'}
-    param_2 = {'lay': 3, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.25, 'opti': 'adam'}
-    param_3 = {'lay': 4, 'acti_hid': 'elu', 'neur': 128, 'drop': 0.15, 'opti': 'adam'}
-    param_dic = [param_1, param_2, param_3]
-    y_pred_weight, y_submit_weight, param_sets = predict_row_weight(X=X, y=y, X_submit=X_submit, param_sets=param_dic)
-
-#%%
-print(y_submit_weight)
-#%%
-#Find best binary cross-entropy loss with various predicted weight matrices
-weight_bce = []
-
-for i in range(len(y_pred_weight)):
-
-    #Calculate weighted predictions for each predicted weight array
-    av_pred_weighted = av_pred * y_pred_weight[i]
-    av_pred_submit_weighted = av_pred_submit * y_submit_weight[i]
-
-    #Cap values in the prediction matrix to 1
-    av_pred_weighted[av_pred_weighted > 1] = 1
-    av_pred_submit_weighted[av_pred_submit_weighted > 1] = 1
-
-    #Find weights with best Binary Cross Entropy on test set
-    current_bce = calc_bce(y_test, av_pred_weighted)
-    weight_bce.append([y_pred_weight[i], current_bce, param_sets[i], y_submit_weight[i]])
-
-    #Calculate bce before and after transformation with weights
-    print("BCE on test set before row weights", calc_bce(y_test, av_pred))
-    print("BCE on test set after row weights", current_bce)
-
-weight_bce.sort(key=lambda x: x[1])
-
-#Calculate average row weight across best performing weight arrays
-weight_average, weight_average_submit = 0, 0
-for i in range(amount_ensemble_weights):
-    weight_average += (weight_bce[i][0]/amount_ensemble_weights)
-    weight_average_submit += (weight_bce[i][3]/amount_ensemble_weights)
+weight_average, weight_average_submit = calc_average_row_weight(av_pred=av_pred, av_pred_submit=av_pred_submit, y_pred_weight=y_pred_weight, y_submit_weight=y_submit_weight, n_ensemble_weights=n_ensemble_weights)
 
 best_pred = av_pred * weight_average
 best_submit = av_pred_submit * weight_average_submit
-print("average of ", amount_ensemble_weights, " gives best BCE on y_test set: ", calc_bce(y_test, best_pred))
-#0.015527145937085152
+print("average of ", n_ensemble_weights, " gives best BCE on y_test set: ", calc_bce(y_test, best_pred))
 
 #Create dataframe and CSV for submission
 submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), best_submit), axis=1)
