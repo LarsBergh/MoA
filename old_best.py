@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import sklearn as sk
 import kerastuner as kt
 
+from PIL import Image
 from os import path
 from kerastuner.tuners import RandomSearch
 from tensorflow.keras.layers import Dense, Dropout, AlphaDropout, Activation, ActivityRegularization, BatchNormalization
@@ -43,7 +44,7 @@ print("kerastuner version: ", kt.__version__)
 is_kaggle = False #Set to true if making upload to kaggle
 
 compute_baseline = False #Set to true to ONLY compute baseline model without scaled variables. Does encode first 3 columns based on ENC_TYPE
-plot_graps = False #Set to true if plots should be created
+plot_graps = True #Set to true if plots should be created
 
 use_k_fold = False
 N_FOLD = 2 #Determines how many folds are used for K-fold
@@ -70,7 +71,7 @@ n_ensemble_weights = 3 #Defines how many of the top row weight array should be u
 ENC_TYPE = "map"
 
 #Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
-SC_TYPE = "robust"
+SC_TYPE = "normalize"
 
 #Set random seed
 RANDOM_STATE = 0
@@ -88,7 +89,7 @@ print("Scaling type: ", SC_TYPE)
 #cp_dose	        dose of drug (high, low)
 #c-	                cell viability data
 #g-	                gene expression data
-
+#%%
 if is_kaggle == True:
     data_folder = "/kaggle/input/lish-moa/"
     output_folder = "/kaggle/working/"
@@ -102,10 +103,288 @@ X = pd.read_csv(data_folder + "train_features.csv")
 y = pd.read_csv(data_folder + "train_targets_scored.csv")
 X_submit = pd.read_csv(data_folder + "test_features.csv")
 
-#Print few columns for report before scaling
-print("Printing example rows of raw data....")
-print(X.loc[[0,1,2,23810,23811],["sig_id", "cp_type", "cp_time", "cp_dose", "g-0", "c-0"]])
+#------------------------ Classes ------------------------#
+class Preprocessor:
+    def __init__(self, X, X_submit, y, encode_cols):
+        self.X = X
+        self.X_submit = X_submit
+        self.y = y
+        self.encode_cols = encode_cols
+        self.X_id_submit = X_submit["sig_id"]
+        self.y_cols = y.columns
 
+    def print_example_rows():
+        print("Printing example rows of raw data....")
+        print(X.loc[[0,1,2,23810,23811],["sig_id", "cp_type", "cp_time", "cp_dose", "g-0", "c-0"]])
+
+    def drop_id(self):
+        print("Dropping id column....")
+        print("X, y, X_submit shape before id remove: ", X.shape, y.shape, X_submit.shape)
+        self.X.drop("sig_id", axis=1, inplace=True)
+        self.X_submit.drop("sig_id", axis=1, inplace=True)
+        self.y.drop("sig_id", axis=1, inplace=True)
+        print("X, y, X_submit shape after id remove: ", X.shape, y.shape, X_submit.shape)
+
+    def encode_df(self, encoder_type):
+        #Encode columns as dummy variables
+        if encoder_type == "dummy":            
+            self.X = pd.concat([self.X.get_dummies(self.X[self.encode_cols], columns=self.encode_cols), self.X[~self.encode_cols]],axis=1)
+            self.X.drop(self.encode_cols, axis=1)
+
+            self.X_submit = pd.concat([self.X_submit.get_dummies(self.X_submit[self.encode_cols], columns=self.encode_cols), self.X_submit[~self.encode_cols]],axis=1)
+            self.X_submit.drop(self.encode_cols, axis=1)
+
+        #Map values to encodable columns
+        elif encoder_type == "map":           
+            self.X['cp_type'] = self.X['cp_type'].map({"ctl_vehicle": 0, "trt_cp": 1})
+            self.X['cp_time'] = self.X['cp_time'].map({24: 0, 48: 0.5, 72: 1})
+            self.X['cp_dose'] = self.X['cp_dose'].map({'D1': 0, 'D2': 1})
+
+            self.X_submit['cp_type'] = self.X_submit['cp_type'].map({"ctl_vehicle": 0, "trt_cp": 1})
+            self.X_submit['cp_time'] = self.X_submit['cp_time'].map({24: 0, 48: 0.5, 72: 1})
+            self.X_submit['cp_dose'] = self.X_submit['cp_dose'].map({'D1': 0, 'D2': 1})
+
+    def scale_df(self, scaler_type):
+        X_cat = self.X[self.encode_cols]
+        X_scale = self.X[X.columns.difference(self.encode_cols)]
+        
+        X_submit_cat  = self.X_submit[self.encode_cols]
+        X_submit_scale = self.X_submit[X_submit.columns.difference(self.encode_cols)]
+
+        #https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-col_plot-all-scaling-py
+        scaler = {
+            "standardize" : StandardScaler(), # gives values 0 mean and unit variance
+            "normalize" : MinMaxScaler(), # scales values between 0 and 1
+            "quantile_normal" : QuantileTransformer(output_distribution="normal"), #non-linear, maps probability density to uniform distribution
+            "quantile_uniform" : QuantileTransformer(output_distribution="uniform"), #matches values to gaussian distribution
+            "power": PowerTransformer(method="yeo-johnson"), # stabilizes variance, minimizes skewness, applies zero mean unit variance also
+            "robust" : RobustScaler() #scaling robust to outliers. removes median, scales data to IQR 
+        }
+
+        sc = scaler[scaler_type]       
+        self.X = pd.concat([X_cat, pd.DataFrame(sc.fit_transform(X_scale), columns=X_scale.columns)], axis=1)
+        self.X_submit = pd.concat([X_submit_cat, pd.DataFrame(sc.fit_transform(X_submit_scale), columns=X_submit_scale.columns)], axis=1)
+        print("Scaler used: ", sc, " to scale X and X_submit")
+
+class Plotter():
+    def __init__(self, X, y, plot_path):
+        self.X = X
+        self.y = y
+        self.plot_path = plot_path
+
+    def plot_sum_per_target_count(self):
+    
+        #Count amount of targets per row and sum by target count
+        label_per_row = self.y.sum(axis=1).value_counts().sort_index(axis=0)
+        print(100-((303+55+13+6)/len(self.y)*100), " percent has 0,1 or 2 labels")
+        print("% 0, 1, 2 labels: ", label_per_row[0]/sum(label_per_row),label_per_row[1]/sum(label_per_row),label_per_row[2]/sum(label_per_row))
+
+        #Plot sum of label counts across all rows 
+        fig, axs = plt.subplots(1,1, figsize=(7,5))
+        target_counts = pd.concat([pd.Series([x for x in range(8)]), label_per_row], axis=1, keys=["targets per drug", "amount of drugs"]).fillna(0)
+        row_plot = sns.barplot(data= target_counts, x="targets per drug", y="amount of drugs")
+        row_plot.set_title('Amount of targets per drug admission')
+        
+        #Add values of bar chart on top of bars
+        for index, row in target_counts.iterrows():
+            row_plot.text(row.name,row["amount of drugs"] + 40, int(row["amount of drugs"]), color='black', ha="center")
+        
+        #Adjust layout and save
+        plt.tight_layout()
+        row_plot.figure.savefig(self.plot_path + "sum_per_target_count.jpg")
+
+    #Show distribution of amount of labels per COLUMN
+    def plot_sum_per_target(self):
+
+        #Create df with label counts per column
+        count_target_df = pd.DataFrame(self.y.sum(axis=0).sort_values(ascending=False), columns=["target count"])
+        
+        #print top 50 targets as pecentage of total targets
+        tot_label = count_target_df["target count"].sum()
+        top_50_label = count_target_df["target count"][:50].sum()
+        bottom_50_label = count_target_df["target count"][-50:].sum()
+        print("Top 50 targets have " + str((top_50_label/tot_label)*100) + " percent of all labels")
+        print("Bottom 50 targets have " + str((bottom_50_label/tot_label)*100) + " percent of all labels")
+
+        #Sub
+        count_target_df_50 = count_target_df.iloc[:50,:]
+        count_target_df_50['target name'] = count_target_df_50.index
+        
+        #Plot target sum across all drug administrations
+        fig, axs = plt.subplots(1,1, figsize=(15,7))
+
+        col_plot = sns.barplot(data=count_target_df_50, x="target name", y="target count")
+        col_plot.set_title('Top 50 targets count across all drug admissions')
+        col_plot.set_xticklabels(col_plot.get_xticklabels(),rotation=45,ha="right",rotation_mode='anchor', fontsize=8)
+        count = 0
+        
+        #Add values of bar chart on top of bars
+        for index, row in count_target_df_50.iterrows():
+            col_plot.text(count,row["target count"] + 6, int(row["target count"]), color='black', ha="center")
+            count += 1
+
+        #Adjust layout and save
+        plt.tight_layout()
+        col_plot.figure.savefig(self.plot_path + "sum_per_target.jpg")
+
+    #Plots cell and gene distributions
+    def plot_gene_cell_dist(self):
+
+        # Get 4 random cell viability and 4 random gene expression cols
+        cols = ["g-0","g-175","g-363","g-599", "c-4", "c-33", "c-65", "c-84"]
+
+        # Create four polar axes and access them through the returned array
+        fig, axs = plt.subplots(2,4, figsize=(20,10))
+
+        #Loop over plot grid
+        count = 0
+        for i in range(0, 2):
+            for j in range(0, 4):
+
+                #Color first and last four plots differently (seperate cell and gene by color)
+                if count >= 4:
+                    axs[i, j].hist(x=self.X.loc[:, cols[count]], bins=50, color="#E1812B")
+                else:
+                    axs[i, j].hist(x=self.X.loc[:, cols[count]], bins=50, color="#3174A1")
+
+                axs[i, j].set_title("Distribution " + cols[count])
+                count += 1
+
+        #Adjust format of plot and save
+        plt.tight_layout()
+        fig.savefig(self.plot_path + "genes_cells-dist.jpg")
+
+    #Plots skew and kurtotis for gene and cell data
+    def skew_kurtosis(self):
+
+        #Calculate skewness and kurtosis
+        kurtosis = self.X.loc[:,"g-0":].kurtosis(axis=0)
+        skew = self.X.loc[:,"g-0":].skew(axis=0)
+
+        #Split kurtosis and skew values into bins
+        bin_skew = [-np.inf, -2, 2, np.inf]
+        lab_skew = ['skew left', 'normally distributed', 'skew right']
+        
+        bin_kurt = [-np.inf, -2, 2, np.inf]
+        lab_kurt = ['platykurtic', 'mesokurtic', 'leptokurtic']
+
+        #Create skew label and kurtosis label columns
+        skew_labeled = pd.cut(skew, bins=bin_skew, labels=lab_skew, ordered=False)
+        kurtosis_labeled = pd.cut(kurtosis, bins=bin_kurt, labels=lab_kurt, ordered=False)
+        
+        #Create full skew, kurtosis dataframe
+        skew_kurt_df = pd.concat([skew, skew_labeled, kurtosis, kurtosis_labeled], 
+                            keys=["skewness", "skewness columns per group", "kurtosis", "kurtosis columns per group"], axis=1)
+
+        #Split into cell and gene skew/kurtosis df
+        gene_df = skew_kurt_df.loc["g-0":"g-771", :]
+        cell_df = skew_kurt_df.loc["c-0":"c-99",:]
+
+        return gene_df, cell_df
+
+    #Plots skew and kurtotis for gene and cell data
+    def skew_kurtosis(self):
+
+        #Calculate skewness and kurtosis
+        kurtosis = self.X.loc[:,"g-0":].kurtosis(axis=0)
+        skew = self.X.loc[:,"g-0":].skew(axis=0)
+
+        #Split kurtosis and skew values into bins
+        bin_skew = [-np.inf, -2, 2, np.inf]
+        lab_skew = ['skew left', 'normally distributed', 'skew right']
+        
+        bin_kurt = [-np.inf, -2, 2, np.inf]
+        lab_kurt = ['platykurtic', 'mesokurtic', 'leptokurtic']
+
+        #Create skew label and kurtosis label columns
+        skew_labeled = pd.cut(skew, bins=bin_skew, labels=lab_skew, ordered=False)
+        kurtosis_labeled = pd.cut(kurtosis, bins=bin_kurt, labels=lab_kurt, ordered=False)
+        
+        #Create full skew, kurtosis dataframe
+        skew_kurt_df = pd.concat([skew, skew_labeled, kurtosis, kurtosis_labeled], 
+                            keys=["skewness", "skewness columns per group", "kurtosis", "kurtosis columns per group"], axis=1)
+
+        #Split into cell and gene skew/kurtosis df
+        gene_df = skew_kurt_df.loc["g-0":"g-771", :]
+        cell_df = skew_kurt_df.loc["c-0":"c-99",:]
+
+        return gene_df, cell_df
+
+    #Plot skew and kurtosis for gene/cell cols
+    def plot_skew_kurtosis(self, df, g_c, s_k, color):
+
+        fig, axs = plt.subplots(1,2, figsize=(10,5))
+        axs[0].hist(x=df[s_k], bins=50, color=color)
+        axs[0].set_title(g_c + " " + s_k + " values")
+        axs[0].set_xlabel(s_k + " value")
+        axs[0].set_ylabel("Amount of " + g_c + " columns")
+
+        bar = df[s_k + " columns per group"].value_counts().reset_index()
+        print(bar.columns)
+        bar_skew = sns.barplot(data=bar, x="index", y=s_k + " columns per group", ax=axs[1], color=color)
+        bar_skew.set_xticklabels(bar_skew.get_xticklabels(),rotation=15,ha="right",rotation_mode='anchor')
+        axs[1].set_title(g_c + " " + s_k + " values")
+        axs[1].set_xlabel('')
+        plt.tight_layout()
+        img_path = self.plot_path + g_c + "_" + s_k + ".jpg"
+        fig.savefig(img_path)
+        return img_path
+
+    def combine_graphs(self, images):
+        #https://stackoverflow.com/questions/30227466/combine-several-images-horizontally-with-python
+        figs = [Image.open(x) for x in images]
+        widths, heights = zip(*(i.size for i in figs))
+
+        total_width = widths[0] * 2
+        max_height = heights[0] * 2
+
+        x_off = figs[0].size[0]
+        y_off = figs[0].size[1]
+
+        new_im = Image.new('RGB', (total_width, max_height))
+        count = 0
+
+        for im in figs:
+            if count == 0:
+                new_im.paste(im, (0,0))
+            elif count == 1:
+                new_im.paste(im, (x_off,0))
+            elif count == 2:
+                new_im.paste(im, (0,y_off))
+            elif count == 3:
+                new_im.paste(im, (x_off,y_off))
+            count += 1
+            
+        new_im.save(self.plot_path + 'total_skew_kurt.jpg')
+
+
+pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
+pre.drop_id()
+
+if plot_graps == True:
+    plotter = Plotter(X=pre.X, y=pre.y, plot_path="figs/")
+
+    #Create histogram of 8 columns pre scaling
+    plotter.plot_gene_cell_dist()
+
+    #Plot target distributions across columns and with rows summed by target counts
+    plotter.plot_sum_per_target_count()
+    plotter.plot_sum_per_target()
+
+    #Get skew and kurtosis values for cell viability and gene expression
+    gene_df, cell_df = plotter.skew_kurtosis()
+
+    #Plot skew and kurtosis for gene expression and cell viability
+    path1 = plotter.plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="skewness", color="#3174A1")
+    path2 = plotter.plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="skewness", color="#E1812B")
+    path3 = plotter.plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="kurtosis", color="#3174A1")
+    path4 = plotter.plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="kurtosis", color="#E1812B")
+    plotter.combine_graphs(images=[path1, path2, path3, path4])
+
+pre.encode_df(encoder_type=ENC_TYPE)
+pre.scale_df(scaler_type=SC_TYPE)
+
+#%%
 #------------------------ Subsetting data ------------------------#
 #Create subsets for train data
 print("Dropping id column....")
@@ -124,138 +403,9 @@ print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape
 #=====================================================================================#
 #================================= Defining functions ================================#
 #=====================================================================================#
+
 #------------------------ Exporatory Data Analysis ------------------------#
 #Show distribution of amount of labels per ROW
-def plot_sum_per_target_count(y):
-    
-    #Count amount of targets per row and sum by target count
-    label_per_row = y.sum(axis=1).value_counts().sort_index(axis=0)
-    print(100-((303+55+13+6)/len(y)*100), " percent has 0,1 or 2 labels")
-    print("% 0, 1, 2 labels: ", label_per_row[0]/sum(label_per_row),label_per_row[1]/sum(label_per_row),label_per_row[2]/sum(label_per_row))
-
-    #Plot sum of label counts across all rows 
-    fig, axs = plt.subplots(1,1, figsize=(7,5))
-    target_counts = pd.concat([pd.Series([x for x in range(8)]), label_per_row], axis=1, keys=["targets per drug", "amount of drugs"]).fillna(0)
-    row_plot = sns.barplot(data= target_counts, x="targets per drug", y="amount of drugs")
-    row_plot.set_title('Amount of targets per drug admission')
-    
-    #Add values of bar chart on top of bars
-    for index, row in target_counts.iterrows():
-        row_plot.text(row.name,row["amount of drugs"] + 40, int(row["amount of drugs"]), color='black', ha="center")
-    
-    #Adjust layout and save
-    plt.tight_layout()
-    row_plot.figure.savefig("figs/sum_per_target_count.jpg")
-
-#Show distribution of amount of labels per COLUMN
-def plot_sum_per_target(y):
-
-    #Create df with label counts per column
-    count_target_df = pd.DataFrame(y.sum(axis=0).sort_values(ascending=False), columns=["target count"])
-    
-    #print top 50 targets as pecentage of total targets
-    tot_label = count_target_df["target count"].sum()
-    top_50_label = count_target_df["target count"][:50].sum()
-    bottom_50_label = count_target_df["target count"][-50:].sum()
-    print("Top 50 targets have " + str((top_50_label/tot_label)*100) + " percent of all labels")
-    print("Bottom 50 targets have " + str((bottom_50_label/tot_label)*100) + " percent of all labels")
-
-    #Sub
-    count_target_df_50 = count_target_df.iloc[:50,:]
-    count_target_df_50['target name'] = count_target_df_50.index
-    
-    #Plot target sum across all drug administrations
-    fig, axs = plt.subplots(1,1, figsize=(15,7))
-
-    col_plot = sns.barplot(data=count_target_df_50, x="target name", y="target count")
-    col_plot.set_title('Top 50 targets count across all drug admissions')
-    col_plot.set_xticklabels(col_plot.get_xticklabels(),rotation=45,ha="right",rotation_mode='anchor', fontsize=8)
-    count = 0
-    
-    #Add values of bar chart on top of bars
-    for index, row in count_target_df_50.iterrows():
-        col_plot.text(count,row["target count"] + 6, int(row["target count"]), color='black', ha="center")
-        count += 1
-
-    #Adjust layout and save
-    plt.tight_layout()
-    col_plot.figure.savefig("figs/sum_per_target.jpg")
-
-#Plots cell and gene distributions
-def plot_gene_cell_dist(df, scaler_type=None):
-
-    # Get 4 random cell viability and 4 random gene expression cols
-    cols = ["g-0","g-175","g-363","g-599", "c-4", "c-33", "c-65", "c-84"]
-
-    # Create four polar axes and access them through the returned array
-    fig, axs = plt.subplots(2,4, figsize=(20,10))
-
-    #Loop over plot grid
-    count = 0
-    for i in range(0, 2):
-        for j in range(0, 4):
-
-            #Color first and last four plots differently (seperate cell and gene by color)
-            if count >= 4:
-                axs[i, j].hist(x=X.loc[:, cols[count]], bins=50, color="#E1812B")
-            else:
-                axs[i, j].hist(x=X.loc[:, cols[count]], bins=50, color="#3174A1")
-
-            axs[i, j].set_title("Distribution " + cols[count])
-            count += 1
-
-    #Adjust format of plot and save
-    plt.tight_layout()
-    fig.savefig("figs/genes_cells-dist.jpg")
-
-#Plots skew and kurtotis for gene and cell data
-def skew_kurtosis(df):
-
-    #Calculate skewness and kurtosis
-    kurtosis = X.loc[:,"g-0":].kurtosis(axis=0)
-    skew = X.loc[:,"g-0":].skew(axis=0)
-
-    #Split kurtosis and skew values into bins
-    bin_skew = [-np.inf, -2, 2, np.inf]
-    lab_skew = ['skew left', 'normally distributed', 'skew right']
-    
-    bin_kurt = [-np.inf, -2, 2, np.inf]
-    lab_kurt = ['platykurtic', 'mesokurtic', 'leptokurtic']
-
-    #Create skew label and kurtosis label columns
-    skew_labeled = pd.cut(skew, bins=bin_skew, labels=lab_skew, ordered=False)
-    kurtosis_labeled = pd.cut(kurtosis, bins=bin_kurt, labels=lab_kurt, ordered=False)
-    
-    #Create full skew, kurtosis dataframe
-    skew_kurt_df = pd.concat([skew, skew_labeled, kurtosis, kurtosis_labeled], 
-                        keys=["skewness", "skewness columns per group", "kurtosis", "kurtosis columns per group"], axis=1)
-
-    #Split into cell and gene skew/kurtosis df
-    gene_df = skew_kurt_df.loc["g-0":"g-771", :]
-    cell_df = skew_kurt_df.loc["c-0":"c-99",:]
-
-    return gene_df, cell_df
-
-#Plot skew and kurtosis for gene/cell cols
-def plot_skew_kurtosis(df, g_c, s_k, color):
-
-    fig, axs = plt.subplots(1,2, figsize=(10,5))
-    axs[0].hist(x=df[s_k], bins=50, color=color)
-    axs[0].set_title(g_c + " " + s_k + " values")
-    axs[0].set_xlabel(s_k + " value")
-    axs[0].set_ylabel("Amount of " + g_c + " columns")
-
-    bar = df[s_k + " columns per group"].value_counts().reset_index()
-    print(bar.columns)
-    bar_skew = sns.barplot(data=bar, x="index", y=s_k + " columns per group", ax=axs[1], color=color)
-    bar_skew.set_xticklabels(bar_skew.get_xticklabels(),rotation=15,ha="right",rotation_mode='anchor')
-    axs[1].set_title(g_c + " " + s_k + " values")
-    axs[1].set_xlabel('')
-    plt.tight_layout()
-    img_path = "figs/"+ g_c + "_" + s_k + ".jpg"
-    fig.savefig(img_path)
-    return img_path
-
 def pca(df, df_sub, pca_type, var_req=None, num_req=None):
     #Get subset on gene or cell data
     pca_cols = [x.startswith("g-") if pca_type == "gene" else x.startswith("c-") for x in df.columns]
@@ -304,71 +454,6 @@ def pca(df, df_sub, pca_type, var_req=None, num_req=None):
     X_sub_pca = pd.DataFrame(PCA(n_components=comp, random_state=RANDOM_STATE).fit_transform(pca_sub),columns=cols)
 
     return X_pca, X_sub_pca
-
-def combine_graphs(images):
-    #https://stackoverflow.com/questions/30227466/combine-several-images-horizontally-with-python
-    import sys
-    from PIL import Image
-
-    figs = [Image.open(x) for x in images]
-    widths, heights = zip(*(i.size for i in figs))
-
-    total_width = widths[0] * 2
-    max_height = heights[0] * 2
-
-    x_off = figs[0].size[0]
-    y_off = figs[0].size[1]
-
-    new_im = Image.new('RGB', (total_width, max_height))
-    count = 0
-
-    for im in figs:
-        if count == 0:
-            new_im.paste(im, (0,0))
-        elif count == 1:
-            new_im.paste(im, (x_off,0))
-        elif count == 2:
-            new_im.paste(im, (0,y_off))
-        elif count == 3:
-            new_im.paste(im, (x_off,y_off))
-        count += 1
-        
-    new_im.save('figs/total_skew_kurt.jpg')
-
-#------------------------ Encoding and scaling dataframe columns ------------------------#
-def scale_df(df, scaler_type):
-    df_other = df.iloc[:, :3]
-    df = df.iloc[:, 3:]
-    
-    #https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-col_plot-all-scaling-py
-    scaler = {
-        "standardize" : StandardScaler(), # gives values 0 mean and unit variance
-        "normalize" : MinMaxScaler(), # scales values between 0 and 1
-        "quantile_normal" : QuantileTransformer(output_distribution="normal"), #non-linear, maps probability density to uniform distribution
-        "quantile_uniform" : QuantileTransformer(output_distribution="uniform"), #matches values to gaussian distribution
-        "power": PowerTransformer(method="yeo-johnson"), # stabilizes variance, minimizes skewness, applies zero mean unit variance also
-        "robust" : RobustScaler() #scaling robust to outliers. removes median, scales data to IQR 
-    }
-
-    sc = scaler[scaler_type]
-    print("Scaler used: ", sc)
-    return pd.concat([df_other, pd.DataFrame(sc.fit_transform(df), columns=df.columns)], axis=1)
-
-def encode_df(df, encoder_type):
-    cols = ["cp_type", "cp_time", "cp_dose"]
-
-    #Encode columns as dummy variables
-    if encoder_type == "dummy":
-        df = pd.concat([pd.get_dummies(df[cols], columns=cols), df],axis=1)
-        df = df.drop(cols, axis=1)
-
-    #Map values to encodable columns
-    elif encoder_type == "map":           
-        df['cp_type'] = df['cp_type'].map({"ctl_vehicle": 0, "trt_cp": 1})
-        df['cp_time'] = df['cp_time'].map({24: 0, 48: 0.5, 72: 1})
-        df['cp_dose'] = df['cp_dose'].map({'D1': 0, 'D2': 1})
-
-    return df
 
 #------------------------ Model functions ------------------------#
 def create_baseline(X_train, y_train, X_val, y_val, X_test, y_test):
@@ -774,6 +859,18 @@ submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), best_submit), a
 pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
 
 #%%
+
+
+
+
+
+
+
+
+
+
+
+
 from sklearn.metrics import recall_score, precision_score, accuracy_score, f1_score
 
 def compare_prediction_matrices(y_true_matrix, y_predict_matrix, weights, score_type):
