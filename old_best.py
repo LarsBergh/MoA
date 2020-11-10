@@ -16,15 +16,17 @@ from os import path
 from kerastuner.tuners import RandomSearch
 from tensorflow.keras.layers import Dense, Dropout, AlphaDropout, Activation, ActivityRegularization, BatchNormalization
 from tensorflow.keras import Sequential
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.callbacks import EarlyStopping, History
 from tensorflow.keras.regularizers import l1, l2, L1L2
 from tensorflow.keras.optimizers import SGD, Adam
-from tensorflow_addons.optimizers import AdamW
 from tensorflow.keras.losses import BinaryCrossentropy
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer, PowerTransformer, RobustScaler
-from tensorflow.python.client import device_lib
 from tensorflow.keras import backend as K
+from tensorflow.python.client import device_lib
+from tensorflow_addons.optimizers import AdamW
+
+from sklearn.model_selection import train_test_split, KFold
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer, PowerTransformer, RobustScaler
 
 #------------------------ Package versions ------------------------#
 #Print versions for "Language and Package section of report"
@@ -39,14 +41,30 @@ print("kerastuner version: ", kt.__version__)
 
 #------------------------ Model settings ------------------------#
 is_kaggle = False #Set to true if making upload to kaggle
+
 compute_baseline = False #Set to true to ONLY compute baseline model without scaled variables. Does encode first 3 columns based on ENC_TYPE
 plot_graps = False #Set to true if plots should be created
-pred_row_weight = False #If true, it recalculates row weights, if false it will try to load row weights.
+
+use_k_fold = False
+N_FOLD = 2 #Determines how many folds are used for K-fold
+
+apply_pca = False #apply principal component analysis to reduce dimensionality 
+
+#Determines how much variance must be explained by gene and cell columns for PCA
+C_VAR_REQ = None
+G_VAR_REQ = None
+
+#Amount of gene/cell PCA components to use.
+C_PCA_REQ = 5 #Max 100
+G_PCA_REQ = 30 #Max 772
+
 create_random_param_models = False #Create extra models instead of using existing models
+N_RAND_MODELS = 8
+
 use_preset_params = True
 n_ensemble_models = 5 #Define how many out of the best models should be used in ensemble
-n_ensemble_weights = 3
-N_RAND_MODELS = 1
+n_ensemble_weights = 3 #Defines how many of the top row weight array should be used in ensemble
+
 #%%
 #Encoding type --> "map", "dummy"
 ENC_TYPE = "map"
@@ -62,7 +80,6 @@ print("Plot graphs: ", plot_graps)
 print("Compute baseline: ", compute_baseline)
 print("Encoding type: ", ENC_TYPE)
 print("Scaling type: ", SC_TYPE)
-print("Predict row weights: ", pred_row_weight)
 
 #------------------------ Loading data ------------------------#
 #Description of task	Predicting a receptor respons based on gene expression, cell viability, drug, dose, and treatment type
@@ -107,7 +124,6 @@ print("X, y, X_submit shape after id remove: " ,X.shape, y.shape, X_submit.shape
 #=====================================================================================#
 #================================= Defining functions ================================#
 #=====================================================================================#
-
 #------------------------ Exporatory Data Analysis ------------------------#
 #Show distribution of amount of labels per ROW
 def plot_sum_per_target_count(y):
@@ -240,6 +256,55 @@ def plot_skew_kurtosis(df, g_c, s_k, color):
     fig.savefig(img_path)
     return img_path
 
+def pca(df, df_sub, pca_type, var_req=None, num_req=None):
+    #Get subset on gene or cell data
+    pca_cols = [x.startswith("g-") if pca_type == "gene" else x.startswith("c-") for x in df.columns]
+
+    #Get df subset based on pca cols
+    pca = df.loc[:,pca_cols]
+    pca_sub = df_sub.loc[:,pca_cols]
+
+    #Get PCA dataframe based on gene/cell dataframe  
+    pca_fit = PCA(n_components=pca.shape[1], random_state=RANDOM_STATE).fit(pca)
+    pca_fit_sub = PCA(n_components=pca_sub.shape[1], random_state=RANDOM_STATE).fit(pca_sub)
+
+    #Get variance explained and tot variance
+    var_pca = pca_fit.explained_variance_
+    var_pca_sub = pca_fit_sub.explained_variance_
+    tot_var = np.sum(var_pca)
+
+    #Loop over variance until total variance exceeds required variance
+    cols = []
+    comp = None
+    
+    if num_req != None: 
+        for_len = num_req
+        comp = num_req
+
+    elif var_req != None:
+        for_len = len(var_pca)
+
+    for pc in range(0, for_len): 
+
+        if pca_type == "gene":
+            cols.append('g-' + str(pc))
+
+        elif pca_type == "cell":
+            cols.append('c-' + str(pc))
+
+        if var_req != None: 
+            expl_var = np.sum(var_pca[:pc])/tot_var  
+
+            if expl_var > var_req:
+                comp = pc
+                break
+
+    #Return PCA df
+    X_pca = pd.DataFrame(PCA(n_components=comp, random_state=RANDOM_STATE).fit_transform(pca),columns=cols)
+    X_sub_pca = pd.DataFrame(PCA(n_components=comp, random_state=RANDOM_STATE).fit_transform(pca_sub),columns=cols)
+
+    return X_pca, X_sub_pca
+
 def combine_graphs(images):
     #https://stackoverflow.com/questions/30227466/combine-several-images-horizontally-with-python
     import sys
@@ -369,6 +434,55 @@ def select_random_parameters(n_param_sets):
     
     return par_total_list
 
+def k_fold(X, y, X_submit, n_fold, params):
+    print("Splitting data....")
+    X, X_test, y, y_test = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE)
+
+    #Define matrices for the average target predictions (for testing and submit)
+    av_pred = np.zeros(y_test.shape)
+    av_pred_submit = np.zeros((X_submit.shape[0], 206))
+
+    #Set loss parameter  
+    test_loss = 0
+
+    #For each parameter set, do N-fold cross validation
+    if use_k_fold == True:
+        #Split data into train and test. train will be splitted later in K-fold
+        for train_i, test_i in KFold(n_splits=n_fold, shuffle=True, random_state=RANDOM_STATE).split(X):
+                
+            #Define train and test for Kfolds
+            X_train = X.iloc[train_i,:]
+            X_val = X.iloc[test_i, :]
+            y_train = y.iloc[train_i, :]
+            y_val = y.iloc[test_i, :]
+
+            #Create a model for each split 
+            model, test_loss, hist = create_model(X_train=X_train, X_val=X_val, 
+                                                  y_train=y_train, y_val=y_val, 
+                                                  X_test=X_test, y_test=y_test,
+                                                  param_dic=params)
+
+        #Add average model performance across all k-folds      
+        params["test_loss"] = test_loss/n_fold   
+
+    else:
+        #Train and validation data split
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.25, random_state=RANDOM_STATE)
+
+        model, test_loss, hist = create_model(X_train=X_train, X_val=X_val, 
+                                              y_train=y_train, y_val=y_val, 
+                                              X_test=X_test, y_test=y_test,
+                                              param_dic=params)      
+
+        #Add average model performance across all k-folds      
+        params["test_loss"] = test_loss
+
+    av_pred += np.array(model.predict(X_test)/n_ensemble_models)
+    av_pred_submit += np.array(model.predict(X_submit)/n_ensemble_models)
+
+
+    return params, model, hist, av_pred, av_pred_submit, y_test
+
 #------------------------ Modeling ------------------------#
 def create_model(X_train, X_val, y_train, y_val, X_test, y_test, param_dic):
     #Print model parameters
@@ -395,12 +509,13 @@ def create_model(X_train, X_val, y_train, y_val, X_test, y_test, param_dic):
     model.compile(optimizer=param_dic["opti"], loss='binary_crossentropy', metrics=["acc"]) 
     
     #Define callbacks
+    hist = History()
     early_stop = EarlyStopping(monitor='val_loss', patience=2, mode='auto')
 
     #Fit and return model and loss history
-    model.fit(X_train, y_train, batch_size=16, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
-    loss = model.evaluate(X_test, y_test, batch_size=1)[0]
-    return model, loss
+    model.fit(X_train, y_train, batch_size=16, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
+    test_loss = model.evaluate(X_test, y_test, batch_size=1)[0]
+    return model, test_loss, hist.history
 
 def create_more_random_models(n_rand_models):
     rand_model_path = output_folder + 'random_models.pickle'
@@ -431,11 +546,8 @@ def create_more_random_models(n_rand_models):
     with open(rand_model_path, 'wb') as f:
         pickle.dump(model_list, f)
 
-def create_model_ensemble(use_preset_params, model_list, n_ensemble_models):
-    #Define matrices for the average target predictions (for testing and submit)
-    av_pred = np.zeros(y_test.shape)
-    av_pred_submit = np.zeros((X_submit.shape[0], 206))
-
+def create_model_ensemble(model_list):
+    
     #Set of current best parameters
     if use_preset_params == True:
         model_1_params = {'lay': 4, 'acti_hid': 'softplus', 'neur': 96, 'drop': 0.15, 'opti': 'adam'} 
@@ -443,20 +555,19 @@ def create_model_ensemble(use_preset_params, model_list, n_ensemble_models):
         model_3_params = {'lay': 5, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.15, 'opti': 'adam'} 
         model_4_params = {'lay': 4, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.1, 'opti': 'nadam'}
         model_5_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.15, 'opti': 'adam'}
-        models = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
+        model_params = [model_1_params, model_2_params]
+        #model_params = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
     
     else:
-        models = [row[0] for row in model_list][:n_ensemble_models]
+        model_params = [row[0] for row in model_list][:n_ensemble_models]
     
     #For each set of parameters, create a model and make an average prediction across all ensemble models
-    for model in models:
-        best_model, best_loss = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=model)
-        av_pred += np.array(best_model.predict(X_test)/n_ensemble_models)
-        av_pred_submit += np.array(best_model.predict(X_submit)/n_ensemble_models)
+    for params in model_params:
+        model_log, model, best_hist, av_pred, av_pred_submit, y_test = k_fold(X=X, y=y, X_submit=X_submit, n_fold=N_FOLD, params=params)
 
-    return av_pred, av_pred_submit
+    return av_pred, av_pred_submit, y_test
 
-def calc_average_row_weight(av_pred, av_pred_submit, y_pred_weight, y_submit_weight, n_ensemble_weights):
+def calc_average_row_weight(av_pred, av_pred_submit, y_pred_weight, y_submit_weight):
     #Find best binary cross-entropy loss with various predicted weight matrices
     weight_bce = []
 
@@ -488,7 +599,7 @@ def calc_average_row_weight(av_pred, av_pred_submit, y_pred_weight, y_submit_wei
 
     return weight_average, weight_average_submit
 
-def create_predict_row_params(use_preset_params, n_param_sets):
+def create_predict_row_params(n_param_sets):
     
     param_dic = []
     
@@ -595,6 +706,21 @@ if compute_baseline == False:
 else: 
     print("Not scaling columns, due to baseline model parameter....")
 
+if apply_pca == True:
+    #Apply PCA on gene/cell columns of X and X_submit
+    print("Before PCA shape", X.shape, y.shape)
+
+    g_df, g_df_sub = pca(df=X, df_sub=X_submit, pca_type="gene", var_req=None, num_req=G_PCA_REQ)
+    c_df, c_df_sub = pca(df=X, df_sub=X_submit, pca_type="cell", var_req=None, num_req=C_PCA_REQ)
+
+    print("Gene df", g_df.shape, "Gene df submit: ", g_df_sub.shape, " with", G_VAR_REQ, "% var explained: ")
+    print("Cell df", c_df.shape, "Cell df",  c_df_sub.shape, " with", C_VAR_REQ, "% var explained: ")
+
+    #Combine main columns with PCA columns into 1 dataframe for X and X_submit
+    main_cols = ["cp_time", "cp_dose", "cp_type"]
+    X = pd.concat([X[main_cols], g_df, c_df],axis=1)
+    X_submit = pd.concat([X_submit[main_cols], g_df_sub, c_df_sub],axis=1)
+
 #Encoding numerical and categorical vars
 print("Encoding categorical variables....")
 
@@ -602,17 +728,6 @@ print("X before encoding it with", ENC_TYPE, X.iloc[:1,:10])
 X = encode_df(df=X, encoder_type=ENC_TYPE)
 X_submit = encode_df(df=X_submit, encoder_type=ENC_TYPE)
 print("X after encoding it with", ENC_TYPE, X.iloc[:1,:10])
-
-#------------------------ Splitting data ------------------------#
-#Train and validation data split
-print("Splitting data....")
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=RANDOM_STATE)
-X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=RANDOM_STATE)
-
-#Print resulting shapes of splitted datasets
-print("X_train, y_train shape: ", X_train.shape, y_train.shape)
-print("X_val, y_val shape: ", X_val.shape, y_val.shape)
-print("X_test, y_test shape: ", X_test.shape, y_test.shape)
 
 #------------------------ Creating models ------------------------#
 np.random.seed(RANDOM_STATE)
@@ -639,15 +754,16 @@ if is_kaggle == False:
     print("Models in model list: ", model_list)
 
 #Create ensemble model with either pre-sets or loaded models
-av_pred, av_pred_submit = create_model_ensemble(use_preset_params=use_preset_params, model_list=model_list, n_ensemble_models=n_ensemble_models)
+av_pred, av_pred_submit, y_test = create_model_ensemble(model_list=model_list)
 
 #Create parameters for row target amount prediction (random parameters or pre-set)
-param_dic = create_predict_row_params(use_preset_params=use_preset_params, n_param_sets=15)
+param_dic = create_predict_row_params(n_param_sets=15)
 
 #Use parameters to create row weight arrays for data and submit
 y_pred_weight, y_submit_weight, param_sets = predict_row_weight(X=X, y=y, X_submit=X_submit, param_sets=param_dic)
 
-weight_average, weight_average_submit = calc_average_row_weight(av_pred=av_pred, av_pred_submit=av_pred_submit, y_pred_weight=y_pred_weight, y_submit_weight=y_submit_weight, n_ensemble_weights=n_ensemble_weights)
+weight_average, weight_average_submit = calc_average_row_weight(av_pred=av_pred, av_pred_submit=av_pred_submit, 
+                                                                y_pred_weight=y_pred_weight, y_submit_weight=y_submit_weight)
 
 best_pred = av_pred * weight_average
 best_submit = av_pred_submit * weight_average_submit
