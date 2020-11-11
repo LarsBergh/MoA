@@ -46,7 +46,6 @@ is_kaggle = False #Set to true if making upload to kaggle
 compute_baseline = False #Set to true to ONLY compute baseline model without scaled variables. Does encode first 3 columns based on ENC_TYPE
 plot_graps = False #Set to true if plots should be created
 
-use_k_fold = False
 N_FOLDS = 2 #Determines how many folds are used for K-fold
 
 apply_pca = False #apply principal component analysis to reduce dimensionality 
@@ -64,14 +63,13 @@ N_RAND_MODELS = 8
 
 use_preset_params = True #Uses pre-defined perameters in the code
 n_ensemble_models = 5 #Define how many out of the best models should be used in ensemble
-n_ensemble_weights = 3 #Defines how many of the top row weight array should be used in ensemble
+n_ensemble_w = 3 #Defines how many of the top row weight array should be used in ensemble
 
-#%%
 #Encoding type --> "map", "dummy"
 ENC_TYPE = "map"
 
 #Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
-SC_TYPE = "normalize"
+SC_TYPE = "robust"
 
 #Set random seed
 RANDOM_STATE = 0
@@ -277,62 +275,45 @@ class Plotter():
                             keys=["skewness", "skewness columns per group", "kurtosis", "kurtosis columns per group"], axis=1)
 
         #Split into cell and gene skew/kurtosis df
-        gene_df = skew_kurt_df.loc["g-0":"g-771", :]
-        cell_df = skew_kurt_df.loc["c-0":"c-99",:]
-
-        return gene_df, cell_df
-
-    #Plots skew and kurtotis for gene and cell data
-    def skew_kurtosis(self):
-
-        #Calculate skewness and kurtosis
-        kurtosis = self.X.loc[:,"g-0":].kurtosis(axis=0)
-        skew = self.X.loc[:,"g-0":].skew(axis=0)
-
-        #Split kurtosis and skew values into bins
-        bin_skew = [-np.inf, -2, 2, np.inf]
-        lab_skew = ['skew left', 'normally distributed', 'skew right']
-        
-        bin_kurt = [-np.inf, -2, 2, np.inf]
-        lab_kurt = ['platykurtic', 'mesokurtic', 'leptokurtic']
-
-        #Create skew label and kurtosis label columns
-        skew_labeled = pd.cut(skew, bins=bin_skew, labels=lab_skew, ordered=False)
-        kurtosis_labeled = pd.cut(kurtosis, bins=bin_kurt, labels=lab_kurt, ordered=False)
-        
-        #Create full skew, kurtosis dataframe
-        skew_kurt_df = pd.concat([skew, skew_labeled, kurtosis, kurtosis_labeled], 
-                            keys=["skewness", "skewness columns per group", "kurtosis", "kurtosis columns per group"], axis=1)
-
-        #Split into cell and gene skew/kurtosis df
-        gene_df = skew_kurt_df.loc["g-0":"g-771", :]
-        cell_df = skew_kurt_df.loc["c-0":"c-99",:]
-
-        return gene_df, cell_df
+        self.gene_df = skew_kurt_df.loc["g-0":"g-771", :]
+        self.cell_df = skew_kurt_df.loc["c-0":"c-99",:]
 
     #Plot skew and kurtosis for gene/cell cols
-    def plot_skew_kurtosis(self, df, g_c, s_k, color):
+    def plot_skew_kurtosis(self):
+        self.img_paths = []
+        df, color = None, None
+        
+        for g_c in ["gene", "cell"]:
+            for s_k in ["skewness", "kurtosis"]:
+                
+                if g_c == "gene":
+                    df = self.gene_df
+                    color="#3174A1"
 
-        fig, axs = plt.subplots(1,2, figsize=(10,5))
-        axs[0].hist(x=df[s_k], bins=50, color=color)
-        axs[0].set_title(g_c + " " + s_k + " values")
-        axs[0].set_xlabel(s_k + " value")
-        axs[0].set_ylabel("Amount of " + g_c + " columns")
+                else: 
+                    df = self.cell_df
+                    color="#E1812B"
+                
+                fig, axs = plt.subplots(1,2, figsize=(10,5))
+                axs[0].hist(x=df[s_k], bins=50, color=color)
+                axs[0].set_title(g_c + " " + s_k + " values")
+                axs[0].set_xlabel(s_k + " value")
+                axs[0].set_ylabel("Amount of " + g_c + " columns")
 
-        bar = df[s_k + " columns per group"].value_counts().reset_index()
-        print(bar.columns)
-        bar_skew = sns.barplot(data=bar, x="index", y=s_k + " columns per group", ax=axs[1], color=color)
-        bar_skew.set_xticklabels(bar_skew.get_xticklabels(),rotation=15,ha="right",rotation_mode='anchor')
-        axs[1].set_title(g_c + " " + s_k + " values")
-        axs[1].set_xlabel('')
-        plt.tight_layout()
-        img_path = self.plot_path + g_c + "_" + s_k + ".jpg"
-        fig.savefig(img_path)
-        return img_path
+                bar = df[s_k + " columns per group"].value_counts().reset_index()
+                print(bar.columns)
+                bar_skew = sns.barplot(data=bar, x="index", y=s_k + " columns per group", ax=axs[1], color=color)
+                bar_skew.set_xticklabels(bar_skew.get_xticklabels(),rotation=15,ha="right",rotation_mode='anchor')
+                axs[1].set_title(g_c + " " + s_k + " values")
+                axs[1].set_xlabel('')
+                plt.tight_layout()
+                img_path = self.plot_path + g_c + "_" + s_k + ".jpg"
+                fig.savefig(img_path)
+                self.img_paths.append(img_path)
 
-    def combine_graphs(self, images):
+    def combine_graphs(self):
         #https://stackoverflow.com/questions/30227466/combine-several-images-horizontally-with-python
-        figs = [Image.open(x) for x in images]
+        figs = [Image.open(x) for x in self.img_paths]
         widths, heights = zip(*(i.size for i in figs))
 
         total_width = widths[0] * 2
@@ -359,15 +340,51 @@ class Plotter():
 
 
 class ModelBuilder():
-    def __init__(self, X, y, X_submit, random_state, is_kaggle, preset_params):
+    def __init__(self, X, y, X_submit, random_state, is_kaggle):
         self.X = X
         self.y = y
         self.X_submit = X_submit
         self.random_state = random_state
         self.is_kaggle = is_kaggle
-        self.preset_params = preset_params
+
+        np.random.seed(random_state)
+        tf.random.set_seed(random_state)
+        sess = tf.compat.v1.Session(graph=tf.compat.v1.get_default_graph())
+        tf.compat.v1.keras.backend.set_session(sess)
     
+    def select_random_parameters(self, n_param_sets):
+        
+        #Defines the allowed search space
+        layers = [3,4,5]
+        acti_hid = ["elu", "relu", "sigmoid", "softplus", "softsign"] 
+        dropout = [0.15, 0.20, 0.25]
+        neurons = [64, 96, 128]
+        optimizers = ["nadam", "adam", SGD(lr=0.05, momentum=0.95), SGD(lr=0.05, momentum=0.98), "rmsprop"]
+
+        #Create dictionary of the given parameters
+        param_dic = {"lay": layers, "acti_hid": acti_hid, "neur": neurons, 
+                    "drop": dropout, "opti": optimizers}
+                    
+        #Create list for parameter sets
+        rand_params = []
+
+        #Loop over all parameter sets and save dictionaries of random parameters to a list
+        for i in range(n_param_sets):
+            rand_param_dic = {}
+
+            #Randomly select parameters from parameter lists
+            for key, parameters in param_dic.items():
+                rand_param_dic[key] = random.choice(parameters)
+                
+            #Append dictionary of random parameters to list
+            if rand_param_dic not in rand_params:
+                rand_params.append(rand_param_dic)
+        
+        self.rand_params = rand_params
+
     def create_baseline(self):
+        """Creates a baseline model to which more advanced models can be compared"""
+
         X_train, X_val, y_train, y_val = train_test_split(self.X, self.y, test_size=0.2, random_state=self.random_state)
         X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=self.random_state)
 
@@ -380,39 +397,9 @@ class ModelBuilder():
         model.fit(X_train, y_train, batch_size=4, epochs=15, validation_data=(X_val, y_val))
         results = model.evaluate(X_test, y_test, batch_size=1)
 
-    #------------------------ select random parameters ------------------------#
-    def select_random_parameters(self, n_param_sets):
-        #Define lists with parameter for random/grid search
-        layers = [3,4,5]
-        acti_hid = ["elu", "relu", "sigmoid", "softplus", "softsign"] 
-        dropout = [0.15, 0.20, 0.25]
-        neurons = [64, 96, 128]
-        optimizers = ["nadam", "adam", SGD(lr=0.05, momentum=0.95), SGD(lr=0.05, momentum=0.98), "rmsprop"]
+    def create_model(self, X_train, y_train, X_val, y_val, X_test, y_test, param_dic):
+        """Creates a multilayer perceptron with the given parameter dictionary and data"""
 
-        #Create dictionary of the given parameters
-        param_dic = {"lay": layers, "acti_hid": acti_hid, 
-                    "neur": neurons, "drop": dropout,
-                    "opti": optimizers}
-        
-        #Create list for parameter sets
-        par_total_list = []
-
-        for i in range(n_param_sets):
-                
-            par_sub_list = {}
-
-            #Randomly select parameters from parameter lists
-            for key, parameters in param_dic.items():
-                par_sub_list[key] = random.choice(parameters)
-                
-            #Append dictionary of random parameters to list
-            if par_sub_list not in par_total_list:
-                par_total_list.append(par_sub_list)
-        
-        self.rand_params = par_total_list
-
-    #------------------------ Modeling ------------------------#
-    def create_model(self, param_dic):
         #Print model parameters
         print("Creating model with:")
         print("Hidden layer count: ", param_dic["lay"])
@@ -446,49 +433,52 @@ class ModelBuilder():
         return model, test_loss, hist.history
 
 
-    def k_fold(self, n_fold, params, n_ensemble_models):
+    def k_fold(self, n_folds, params, n_ensemble_models):
+        """Runs n_fold cross validation by creating multiple models with the create model function"""
+
         print("Splitting data....")
         X, X_test, y, y_test = train_test_split(self.X, self.y, test_size=0.2, random_state=self.random_state)
 
         #Define matrices for the average target predictions (for testing and submit)
-        av_pred = np.zeros(y_test.shape)
-        av_pred_submit = np.zeros((self.X_submit.shape[0], 206))
+        self.average_pred = np.zeros(y_test.shape)
+        self.average_pred_submit = np.zeros((self.X_submit.shape[0], 206))
+        self.y_test = y_test
 
         #Set loss parameter  
         test_loss = 0
 
         #Split data into train and test. train will be splitted later in K-fold
-        for train_i, test_i in KFold(n_splits=n_fold, shuffle=True, random_state=self.random_state).split(self.X):
+        for train_i, test_i in KFold(n_splits=n_folds, shuffle=True, random_state=self.random_state).split(self.X):
                 
             #Define train and test for Kfolds
-            X_train = X.iloc[train_i,:]
-            X_val = X.iloc[test_i, :]
-            y_train = y.iloc[train_i, :]
-            y_val = y.iloc[test_i, :]
+            X_train = self.X.iloc[train_i,:]
+            X_val = self.X.iloc[test_i, :]
+            y_train = self.y.iloc[train_i, :]
+            y_val = self.y.iloc[test_i, :]
 
             #Create a model for each split 
-            model, test_loss, hist = create_model(X_train=X_train, X_val=X_val, 
+            model, test_loss, hist = self.create_model(X_train=X_train, X_val=X_val, 
                                                 y_train=y_train, y_val=y_val, 
                                                 X_test=X_test, y_test=y_test,
-                                                param_dic=params)
+                                                param_dic=params)                                    
 
         #Add average model performance across all k-folds      
-        params["test_loss"] = test_loss/n_fold   
+        params["test_loss"] = test_loss/n_folds   
 
-        av_pred += np.array(model.predict(X_test)/self.n_ensemble_models)
-        av_pred_submit += np.array(model.predict(X_submit)/self.n_ensemble_models)
-
-        return params, model, hist, av_pred, av_pred_submit, y_test
+        self.average_pred += np.array(model.predict(X_test)/n_ensemble_models)
+        self.average_pred_submit += np.array(model.predict(X_submit)/n_ensemble_models)
+        self.history = hist
 
     def create_model_ensemble(self, n_ensemble_models, n_folds, use_preset_params):
-        
+        """Creates an ensemble model by applying K-fold cross validation to a given list of parameters"""
+
         model_list = []
 
         #Load model parameters and losses
         if self.is_kaggle == False:
             with open(output_folder + 'random_models.pickle', 'rb') as f:
                 model_list = pickle.load(f)
-            print(len(model_list), " amount of models in model object...", "Models in model list: ", model_list)
+            #print(len(model_list), " amount of models in model object...", "Models in model list: ", model_list)
 
         #Set of current best parameters
         if use_preset_params == True:
@@ -497,43 +487,120 @@ class ModelBuilder():
             model_3_params = {'lay': 5, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.15, 'opti': 'adam'} 
             model_4_params = {'lay': 4, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.1, 'opti': 'nadam'}
             model_5_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.15, 'opti': 'adam'}
-            model_params = [model_1_params, model_2_params]
-            #model_params = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
+            model_params = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
+            print("Number of models to be created: Parameter sets: ",len(model_params), " n_folds: ", n_folds, " total: ", len(model_params) * n_folds )
         
         else:
             model_params = [row[0] for row in model_list][:n_ensemble_models]
         
         #For each set of parameters, create a model and make an average prediction across all ensemble models
-        for params in model_params:
-            model_log, model, best_hist, av_pred, av_pred_submit, y_test = self.k_fold(n_fold=n_folds, params=params, n_ensemble_models=n_ensemble_models)
+        for model_i, params in enumerate(model_params):
+            print("Running K_fold on model: ", model_i + 1, "/", len(model_params))
+            self.k_fold(n_folds=n_folds, params=params, n_ensemble_models=n_ensemble_models)
 
-        return av_pred, av_pred_submit, y_test
 
-    #------------------------ Predicting row weights for prediction matrix ------------------------#
-    def predict_row_weight(self):
-        labels = self.y.sum(axis=1)
-        X_train, X_val, y_train, y_val = train_test_split(self.X, labels, test_size=0.2, random_state=self.random_state)
-        X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=self.random_state)
-
-        early_stop = EarlyStopping(monitor='val_mae', patience=3, mode='auto')
-
-        print("Creating target prediction model....")
-        model = Sequential()
-        for i in range(3):
-            model.add(BatchNormalization())
-            model.add(Dropout(0.2))
-            model.add(Dense(64, activation='selu'))
-        model.add(Dense(1, activation='linear')) 
-        model.compile(optimizer="adam", loss='mae', metrics=["mae"]) 
-
-        model.fit(X_train, y_train, batch_size=8, epochs=25, validation_data=(X_val, y_val), callbacks=early_stop)
-        model.evaluate(X_test, y_test, batch_size=1)
+    #------------------------ Calculating row weights ------------------------#
+    def get_weight_params(self, n_param_sets):
+        """Returns parameter sets. Either random parameters from the select random parameter function or params that have been proven in the preset."""
+        param_sets = []
         
-        y_pred_weight = model.predict(X_test).clip(min=0)
-        y_submit_weight = model.predict(self.X_submit).clip(min=0)
+        #If true, use some predefined parameters that have been found to work
+        if use_preset_params == True:
+            param_set_1 = {'lay': 4, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'}
+            param_set_2 = {'lay': 3, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.25, 'opti': 'adam'}
+            param_set_3 = {'lay': 4, 'acti_hid': 'elu', 'neur': 128, 'drop': 0.15, 'opti': 'adam'}
+            param_sets = [param_set_1, param_set_2, param_set_3]
+
+        #if you should not use pre-set parameters, generate random parameter sets
+        else:
+            param_sets = self.select_random_parameters(n_param_sets=n_param_sets)
+    
+        return param_sets
+
+    def predict_weights(self, param_sets):
+        """Predicts row weights for the prediction matrices by training a model that minimizes the absolute error of the amount of targets per row in X_train"""
         
-        self.y_pred_weight = y_pred_weight
-        self.y_submit_weight = y_submit_weight
+        y_pred_weights, y_submit_weights = [], []
+
+        #Loop over all sets of parameters in the param_sets list
+        for param_dic in param_sets:
+            
+            #Defines training data. y is targets per row, X is preprocessed X data
+            targets_per_row = self.y.sum(axis=1)
+            X_train, X_val, y_train, y_val = train_test_split(self.X, targets_per_row, test_size=0.2, random_state=self.random_state)
+            X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=self.random_state)
+
+            #Creates MLP to minimze absolute error between predicted amount of targets per row and actual
+            print("Creating target prediction model....")
+            model = Sequential()
+            for i in range(3):
+                model.add(BatchNormalization())
+                model.add(Dropout(0.2))
+                model.add(Dense(64, activation='selu'))
+            model.add(Dense(1, activation='linear')) 
+            model.compile(optimizer="adam", loss='mae', metrics=["mae"]) 
+
+            #Define early stop and fit model on data and evaluate results
+            early_stop = EarlyStopping(monitor='val_mae', patience=3, mode='auto')
+            model.fit(X_train, y_train, batch_size=8, epochs=30, validation_data=(X_val, y_val), callbacks=early_stop)
+            model.evaluate(X_test, y_test, batch_size=1)
+            
+            #Uses trained model to predict the amount of targets per row for X data and submit data
+            y_pred_weights.append(model.predict(X_test).clip(min=0))
+            y_submit_weights.append(model.predict(self.X_submit).clip(min=0))
+            
+        return y_pred_weights, y_submit_weights
+
+    def calc_average_row_weight(self, pred_w, submit_w, param_sets, n_ensemble_w):
+        """Calculates the average row weights, based on lists of row weights and the amount of ensembles to be used for the model"""
+
+        #Find best binary cross-entropy loss with various predicted weight matrices
+        weight_bce = []
+
+        print("BCE on test set before row weights", self.calc_bce(self.y_test, self.average_pred))
+
+        for i in range(len(pred_w)):
+
+            #Calculate weighted predictions for each predicted weight array
+            av_pred_weighted = self.average_pred * pred_w[i]
+            av_pred_submit_weighted = self.average_pred_submit * submit_w[i]
+
+            #Cap values in the prediction matrix to 1
+            av_pred_weighted[av_pred_weighted > 1] = 1
+            av_pred_submit_weighted[av_pred_submit_weighted > 1] = 1
+
+            #Find weights with best Binary Cross Entropy on test set
+            bce = self.calc_bce(self.y_test, av_pred_weighted)
+            weight_bce.append([bce, pred_w[i], param_sets[i], submit_w[i]])
+
+            #Calculate bce after transformation with weights
+            print("BCE on test set after row weights", bce)
+
+        weight_bce.sort(key=lambda x: x[0])
+         
+        #Calculate average row weight across best performing weight arrays
+        w_average, w_average_submit = 0, 0
+        for i in range(n_ensemble_w):
+            w_average += (weight_bce[i][0]/n_ensemble_w)
+            w_average_submit += (weight_bce[i][3]/n_ensemble_w)
+
+        self.w_average = w_average
+        self.w_average_submit = w_average_submit
+
+    def compute_best_matrix(self):
+        """Computes the best prediction matrix based on the ensemble weights and ensemble predictions"""
+        self.best_mat = self.average_pred * self.w_average
+        self.best_submit_mat = self.average_pred_submit * self.w_average_submit
+
+    def calc_bce(self, y_pred, y_true):
+        """Calculates Binary Crossentropy for predicted and true matrices"""
+        bce = tf.keras.losses.BinaryCrossentropy()
+        return bce(y_pred, y_true).numpy()
+
+    def best_matrix_to_csv(self, submit_id_col, y_cols):
+        """Writes the submit prediction matrix to a csv file"""
+        submit_df = np.concatenate((np.array(submit_id_col).reshape(-1,1), self.best_submit_mat), axis=1)
+        pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
 
 #------------------------ Init preprocessor ------------------------#
 pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
@@ -551,26 +618,41 @@ if plot_graps == True:
     plotter.plot_sum_per_target()
 
     #Get skew and kurtosis values for cell viability and gene expression
-    gene_df, cell_df = plotter.skew_kurtosis()
+    plotter.skew_kurtosis()
 
     #Plot skew and kurtosis for gene expression and cell viability
-    path1 = plotter.plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="skewness", color="#3174A1")
-    path2 = plotter.plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="skewness", color="#E1812B")
-    path3 = plotter.plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="kurtosis", color="#3174A1")
-    path4 = plotter.plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="kurtosis", color="#E1812B")
-    plotter.combine_graphs(images=[path1, path2, path3, path4])
+    plotter.plot_skew_kurtosis()
+
+    #Combine the various skew and kurtosis images into 1
+    plotter.combine_graphs()
 
 #------------------------ Encode and scale X data ------------------------#
 pre.encode_df(encoder_type=ENC_TYPE)
 pre.scale_df(scaler_type=SC_TYPE)
-#%%
+
 #------------------------ Build models ------------------------#
 modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
                             random_state=RANDOM_STATE, is_kaggle=is_kaggle)
-#modelbuilder.create_baseline()
-#modelbuilder.predict_row_weight()
-#modelbuilder.select_random_parameters(n_param_sets=15)
+
+if compute_baseline == True:
+    modelbuilder.create_baseline()
+    sys.exit()
+
+#Create an K-folded ensemble model of either preset params or read_params
 modelbuilder.create_model_ensemble(n_ensemble_models=n_ensemble_models, n_folds=N_FOLDS, use_preset_params=use_preset_params)
+
+param_sets = modelbuilder.get_weight_params(n_param_sets=15)
+
+pred_w, submit_w = modelbuilder.predict_weights(param_sets=param_sets)
+
+modelbuilder.calc_average_row_weight(pred_w=pred_w, submit_w=submit_w, param_sets=param_sets, n_ensemble_w=n_ensemble_w)
+
+modelbuilder.compute_best_matrix()
+
+best_bce = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=modelbuilder.best_mat)
+print("Best Binary crossentropy is: ", best_bce)
+modelbuilder.best_matrix_to_csv(submit_id_col=pre.X_id_submit, y_cols=pre.y_cols)
+
 #%%
 #------------------------ Exporatory Data Analysis ------------------------#
 #Show distribution of amount of labels per ROW
@@ -653,146 +735,11 @@ def create_more_random_models(n_rand_models):
     with open(rand_model_path, 'wb') as f:
         pickle.dump(model_list, f)
 
-def calc_average_row_weight(av_pred, av_pred_submit, y_pred_weight, y_submit_weight):
-    #Find best binary cross-entropy loss with various predicted weight matrices
-    weight_bce = []
-
-    for i in range(len(y_pred_weight)):
-
-        #Calculate weighted predictions for each predicted weight array
-        av_pred_weighted = av_pred * y_pred_weight[i]
-        av_pred_submit_weighted = av_pred_submit * y_submit_weight[i]
-
-        #Cap values in the prediction matrix to 1
-        av_pred_weighted[av_pred_weighted > 1] = 1
-        av_pred_submit_weighted[av_pred_submit_weighted > 1] = 1
-
-        #Find weights with best Binary Cross Entropy on test set
-        current_bce = calc_bce(y_test, av_pred_weighted)
-        weight_bce.append([y_pred_weight[i], current_bce, param_sets[i], y_submit_weight[i]])
-
-        #Calculate bce before and after transformation with weights
-        print("BCE on test set before row weights", calc_bce(y_test, av_pred))
-        print("BCE on test set after row weights", current_bce)
-
-    weight_bce.sort(key=lambda x: x[1])
-
-    #Calculate average row weight across best performing weight arrays
-    weight_average, weight_average_submit = 0, 0
-    for i in range(n_ensemble_weights):
-        weight_average += (weight_bce[i][0]/n_ensemble_weights)
-        weight_average_submit += (weight_bce[i][3]/n_ensemble_weights)
-
-    return weight_average, weight_average_submit
-
-def create_predict_row_params(n_param_sets):
-    
-    param_dic = []
-    
-    #If true, use some predefined parameters that have been found to work
-    if use_preset_params == True:
-        param_1 = {'lay': 4, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'}
-        param_2 = {'lay': 3, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.25, 'opti': 'adam'}
-        param_3 = {'lay': 4, 'acti_hid': 'elu', 'neur': 128, 'drop': 0.15, 'opti': 'adam'}
-        param_dic = [param_1, param_2, param_3]
-
-    #if you should not use pre-set parameters, generate random parameter sets
-    else:
-        param_dic = select_random_parameters(n_param_sets=n_param_sets)
-   
-    return param_dic
-
-#Predict weights per row and label probabilities
-def predict_row_weight(X, y, X_submit, param_sets):    
-    y_pred_weights = []
-    y_submit_weights = []
-
-    for param_dic in param_sets:
-
-        labels = y.sum(axis=1)
-        X_train_lin, X_val_lin, y_train_lin, y_val_lin = train_test_split(X, labels, test_size=0.2, random_state=RANDOM_STATE)
-        X_train_lin, X_test_lin, y_train_lin, y_test_lin = train_test_split(X_train_lin, y_train_lin, test_size=0.25, random_state=RANDOM_STATE)
-
-        #Print model parameters
-        print("Creating row weight prediction with with:")
-        print("Hidden layer count: ", param_dic["lay"])
-        print("Activation hidden: ", param_dic["acti_hid"])
-        print("Neuron count per layer: ", param_dic["neur"])
-        print("Dropout value: ", param_dic["drop"])
-        print("Optimizer: ", param_dic["opti"])
-
-        #Create model
-        model = Sequential()
-        
-        #Create layers based on count with specified activations and dropouts
-        for l in range(0,param_dic["lay"]):
-            model.add(BatchNormalization())
-            model.add(Dropout(param_dic["drop"]))
-            model.add(Dense(param_dic["neur"], activation=param_dic["acti_hid"]))            
-
-        #Add output layer
-        model.add(Dense(1, activation="linear")) 
-
-        #Define optimizer and loss
-        model.compile(optimizer=param_dic["opti"], loss='mae', metrics=["mae"]) 
-        
-        #Define callbacks
-        early_stop = EarlyStopping(monitor='val_mae', patience=3, mode='auto')
-
-        #Fit and return model and loss history
-        model.fit(X_train_lin, y_train_lin, batch_size=16, epochs=25, validation_data=(X_val_lin, y_val_lin), callbacks=early_stop)
-        model.evaluate(X_test_lin, y_test_lin, batch_size=1)
-
-        y_pred_weights.append(model.predict(X_test_lin).clip(min=0))
-        y_submit_weights.append(model.predict(X_submit).clip(min=0))
-    
-    return y_pred_weights, y_submit_weights, param_sets
-
-#------------------------ Evaluation functions ------------------------#
-def calc_bce(y_true, y_pred):
-    bce = tf.keras.losses.BinaryCrossentropy()
-    return bce(y_true, y_pred).numpy()
-
 #=====================================================================================#
 #================================= Execute main code =================================#
 #=====================================================================================#
 
-#------------------------ Plotting of raw data ------------------------#
-if plot_graps == True:
-    print("Plotting data/label distribution  graphs")
-
-    #Create histogram of 8 columns pre scaling
-    plot_gene_cell_dist(df=X)
-
-    #Plot target distributions across columns and with rows summed by target counts
-    plot_sum_per_target_count(y=y)
-    plot_sum_per_target(y=y)
-
-    #Get skew and kurtosis values for cell viability and gene expression
-    gene_df, cell_df = skew_kurtosis(df=X)
-
-    #Plot skew and kurtosis for gene expression and cell viability
-    path1 = plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="skewness", color="#3174A1")
-    path2 = plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="skewness", color="#E1812B")
-    path3 = plot_skew_kurtosis(df=gene_df, g_c="gene", s_k="kurtosis", color="#3174A1")
-    path4 = plot_skew_kurtosis(df=cell_df, g_c="cell", s_k="kurtosis", color="#E1812B")
-    combine_graphs(images=[path1, path2, path3, path4])
-
-#------------------------ Scaling/Encoding X data ------------------------#
-#If baseline is not computed, use scaling scheme
-if compute_baseline == False:
-    print("Scaling gene expression and cell viability columns....")
-    
-    #Scaling values
-    print("X before scaling it with", SC_TYPE, X.iloc[:1,:10])
-    X_submit = scale_df(df=X_submit, scaler_type=SC_TYPE)
-    X = scale_df(df=X, scaler_type=SC_TYPE)
-    print("X after scaling it with", ENC_TYPE, X.iloc[:1,:10])
-
-else: 
-    print("Not scaling columns, due to baseline model parameter....")
-
-if apply_pca == True:
+"""if apply_pca == True:
     #Apply PCA on gene/cell columns of X and X_submit
     print("Before PCA shape", X.shape, y.shape)
 
@@ -807,43 +754,15 @@ if apply_pca == True:
     X = pd.concat([X[main_cols], g_df, c_df],axis=1)
     X_submit = pd.concat([X_submit[main_cols], g_df_sub, c_df_sub],axis=1)
 
-#Encoding numerical and categorical vars
-print("Encoding categorical variables....")
-
-print("X before encoding it with", ENC_TYPE, X.iloc[:1,:10])
-X = encode_df(df=X, encoder_type=ENC_TYPE)
-X_submit = encode_df(df=X_submit, encoder_type=ENC_TYPE)
-print("X after encoding it with", ENC_TYPE, X.iloc[:1,:10])
-
-#------------------------ Creating models ------------------------#
-np.random.seed(RANDOM_STATE)
-tf.random.set_seed(RANDOM_STATE)
-sess = tf.compat.v1.Session(graph=tf.compat.v1.get_default_graph())
-tf.compat.v1.keras.backend.set_session(sess)
-
-if create_baseline == True:
-    create_baseline(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test)
-    sys.exit()
 
 #Create extra randomly generated models to add to saved models object for later selection
 if create_random_param_models == True:
     create_more_random_models(n_rand_models=N_RAND_MODELS)
 
-#Create en ensemble prediction matrix (average matrix) based on the n_ensemble_models amount of models
-model_list = []
-
-#Load model parameters and losses
-if is_kaggle == False:
-    with open(output_folder + 'random_models.pickle', 'rb') as f:
-        model_list = pickle.load(f)
-    print(len(model_list), " amount of models in model object...")
-    print("Models in model list: ", model_list)
 
 #Create ensemble model with either pre-sets or loaded models
 av_pred, av_pred_submit, y_test = create_model_ensemble(model_list=model_list)
 
-#Create parameters for row target amount prediction (random parameters or pre-set)
-param_dic = create_predict_row_params(n_param_sets=15)
 
 #Use parameters to create row weight arrays for data and submit
 y_pred_weight, y_submit_weight, param_sets = predict_row_weight(X=X, y=y, X_submit=X_submit, param_sets=param_dic)
@@ -853,131 +772,4 @@ weight_average, weight_average_submit = calc_average_row_weight(av_pred=av_pred,
 
 best_pred = av_pred * weight_average
 best_submit = av_pred_submit * weight_average_submit
-print("average of ", n_ensemble_weights, " gives best BCE on y_test set: ", calc_bce(y_test, best_pred))
-
-#Create dataframe and CSV for submission
-submit_df = np.concatenate((np.array(X_id_submit).reshape(-1,1), best_submit), axis=1)
-pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
-
-#%%
-
-
-
-
-
-
-
-
-
-
-
-
-from sklearn.metrics import recall_score, precision_score, accuracy_score, f1_score
-
-def compare_prediction_matrices(y_true_matrix, y_predict_matrix, weights, score_type):
-    #Round weights and create binary matrix
-    round_weights = weights.round(decimals=0)
-    bi_pred = np.zeros(y_pred_mat.shape)
-   
-   #Loop over rows in prediction matrix
-    for row in range(y_predict_matrix.shape[0]):
-
-        #Get amount of targets per row
-        round_weight_row = int(round_weights[row])
-
-        #Get positions of X highest probability predictions. 
-        max_args_row = y_predict_matrix[row].argsort()[::-1][:round_weight_row]
-
-        #Set all X highest value indices per row to 1
-        for max_arg in max_args_row:
-            bi_pred[row][max_arg] = 1
-
-    #Micro recall is used 
-    true = [[0,0,0,1],[0,0,0,1]]
-    pred = [[1,0,0,1],[0,0,0,1]]
-    print(accuracy_score(true, pred))
-    print(recall_score(true, pred, average="macro"))
-    print(precision_score(true, pred, average="macro"))
-
-    print(accuracy_score(y_true_matrix, bi_pred))
-
-    #Recall: TP/(TP+FN) --> What percentage were true predictions compared to true pred + false pred
-    print(recall_score(y_true_matrix, bi_pred, average="micro")) #Micro to calculate individual contributions to recall, not classese average
-
-    #Precision: TP/(TP+FP) --> Of all positive predictions, how many correct 1/4 predictions is correct
-    print(precision_score(y_true_matrix, bi_pred, average="micro")) #Micro to calculate individual contributions to recall, not classese average
-    
-
-compare_prediction_matrices(y_true_matrix=y_test, y_predict_matrix=y_pred_mat, weights=y_pred_weight, score_type="accuracy")
-#Calculate F1, Accuracy, Recall, Precision
-print(y_matrix_x_weight.shape)
-print(y_test.shape)
-#%%
-
-def build_model(hp):
-    acti = ["relu", "selu", "elu", "linear"]
-    opti = ["Adam", "sgd", "adagrad"]
-    #Adam(hp.Choice('learning_rate',values=[1e-2, 1e-3, 1e-4]
-
-    model = Sequential()
-    for i in range(2, np.random.randint(low=2, high=4)):
-        model.add(Dense(units=hp.Int('neuron_hidden',min_value=32,max_value=512,step=32), activation=hp.Choice(name="activation_hidden", values=acti)))
-        model.add(BatchNormalization())
-        model.add(Dropout(0.2))
-    model.add(Dense(206, activation='softmax'))                                    
-    model.compile(optimizer=hp.Choice(name="optimizer", values=opti),loss='binary_crossentropy',metrics=['binary_crossentropy'])
-    return model
-
-tuner = RandomSearch(
-    build_model,
-    objective='val_loss',
-    max_trials=5,
-    seed=RANDOM_STATE,
-    executions_per_trial=1,
-    directory='output',
-    project_name='MoA target')
-
-tuner.search(X, y, epochs=5, validation_data=(X_val, y_val))
-
-#%%
-from sklearn.multiclass import OneVsRestClassifier
-from sklearn.svm import LinearSVC
-
-classifier = OneVsRestClassifier(LinearSVC()).fit(X_train, y_train)
-lin_svc_pred = classifier.predict(X_val)
-
-#%%
-from sklearn.multioutput import MultiOutputClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import log_loss
-
-import time
-start_time = time.time()
-
-forest = RandomForestClassifier(random_state=RANDOM_STATE)
-multi_target_forest = MultiOutputClassifier(forest, n_jobs=-1)
-predictions = multi_target_forest.fit(X_train, y_train).predict(X_val)
-print(log_loss(y_val, predictions))
-
-elapsed_time = time.time() - start_time
-print("Time elapsed: ", elapsed_time)
-
-
-#%%
-def build_ensemble_model(tuner, num_models, X_test):
-    models = tuner.get_best_models(num_models=3)
-    predictions = []
-    print(X_test.shape)
-    for model in models:
-        predictions.append(model.predict(X_test))
-    return predictions
-
-predictions = build_ensemble_model(tuner, 3, X_test)
-print(predictions)
-#%%
-model_1 = tuner.get_best_hyperparameters(num_trials = 1)[0]
-model_2 = tuner.get_best_hyperparameters(num_trials = 1)[1]
-model_3 = tuner.get_best_hyperparameters(num_trials = 1)[2]
-
-model = tuner.hypermodel.build(best_hps)
-y_pred model.predict(X_test)
+print("average of ", n_ensemble_w, " gives best BCE on y_test set: ", calc_bce(y_test, best_pred))"""
