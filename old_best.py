@@ -70,7 +70,7 @@ n_ensemble_w = 1 #Defines how many of the top row weight array should be used in
 ENC_TYPE = "map"
 
 #Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
-SC_TYPE = "robust"
+SC_TYPE = "quantile_uniform"
 
 #Set random seed
 RANDOM_STATE = 0
@@ -188,7 +188,6 @@ class Preprocessor:
         }
 
         sc = scaler[scaler_type]       
-        print("scaled shape", pd.DataFrame(sc.fit_transform(X_scale).shape))
         self.X = pd.concat([X_cat, pd.DataFrame(sc.fit_transform(X_scale), columns=X_scale.columns)], axis=1)
         self.X_submit = pd.concat([X_submit_cat, pd.DataFrame(sc.fit_transform(X_submit_scale), columns=X_submit_scale.columns)], axis=1)
         print("Scaler used: ", sc, " to scale X and X_submit")
@@ -485,7 +484,7 @@ class ModelBuilder():
         early_stop = EarlyStopping(monitor='val_loss', patience=2, mode='auto')
 
         #Fit and return model and loss history
-        model.fit(X_train, y_train, batch_size=16, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
+        model.fit(X_train, y_train, batch_size=8, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop, hist])
         test_loss = model.evaluate(X_test, y_test, batch_size=8)[0]
         return model, test_loss, hist.history
         
@@ -521,7 +520,7 @@ class ModelBuilder():
         early_stop = EarlyStopping(monitor='val_mae', patience=3, mode='auto')
 
         #Fit and return model and loss history
-        model.fit(X_train, y_train, batch_size=16, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
+        model.fit(X_train, y_train, batch_size=8, epochs=10, validation_data=(X_val, y_val), callbacks=[early_stop])
         test_loss = model.evaluate(X_test, y_test, batch_size=8)[0]
         
         #Uses trained model to predict the amount of targets per row for X data and submit data (set all vals under 0 to 0)
@@ -633,10 +632,6 @@ class ModelBuilder():
             print("Creating the following num of weight arrays: ", len(row_weight_params))
             self.k_fold_weights(n_folds=n_folds, row_weight_params=row_weight_param, 
             min_target_count=min_target_amount, use_upsampling=use_upsampling)
-        
-        #Average the weight array based on amount of parameter sets
-        self.y_pred_weights = self.y_pred_weights/len(row_weight_params)
-        self.y_submit_weights = self.y_submit_weights/(len(row_weight_params))  
 
     def calc_average_row_weight(self, pred_w, submit_w, param_sets, n_ensemble_w):
         """Calculates the average row weights, based on lists of row weights and the amount of ensembles to be used for the model"""
@@ -684,11 +679,27 @@ class ModelBuilder():
         bce = tf.keras.losses.BinaryCrossentropy()
         return bce(y_true, y_pred).numpy()
 
+    def targets_to_zero(self, bottom_n_cols):
+        #Create df with label counts per column
+        count_target_df = pd.DataFrame(self.y.sum(axis=0).sort_values(ascending=False), columns=["target count"])
+        
+        #print top 50 targets as pecentage of total targets
+        bottom_50_labels = count_target_df["target count"][-50:].index
+
+        df = self.best_mat      
+        df[df[bottom_50_labels]] = 0
+        count_zero_cols = 0
+        for col in df.columns:
+            if df[col].sum() == 0:
+                count_zero_cols += 1
+        print("amount of cols zero:", count_zero_cols)   
+   
+
     def best_matrix_to_csv(self, submit_id_col, y_cols):
         """Writes the submit prediction matrix to a csv file"""
         submit_df = np.concatenate((np.array(submit_id_col).reshape(-1,1), self.best_submit_mat), axis=1)
         pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
-
+#%%
 #------------------------ Init preprocessor ------------------------#
 pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
 #pre.upsample(min_target_count=100, random_state=RANDOM_STATE)
@@ -718,7 +729,7 @@ if plot_graps == True:
 #------------------------ Encode and scale X data ------------------------#
 pre.encode_df(encoder_type=ENC_TYPE)
 pre.scale_df(scaler_type=SC_TYPE)
-
+#%%
 #------------------------ Build models ------------------------#
 modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
                             random_state=RANDOM_STATE, is_kaggle=is_kaggle)
@@ -736,6 +747,8 @@ model_5_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.15, 'opti':
 #model_params = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
 model_params = [model_1_params, model_2_params]
 
+model_6_params = {'lay': 10, 'acti_hid': 'elu', 'neur': 1024, 'drop': 0.5, 'opti': 'adam'}
+
 row_weight_params_1 = {'lay': 4, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'}
 row_weight_params_2 = {'lay': 3, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.25, 'opti': 'adam'}
 row_weight_params_3 = {'lay': 4, 'acti_hid': 'elu', 'neur': 128, 'drop': 0.15, 'opti': 'adam'}
@@ -748,10 +761,53 @@ modelbuilder.create_model_ensemble(n_folds=N_FOLDS, n_ensemble_models=n_ensemble
 
 modelbuilder.compute_best_matrix()
 modelbuilder.best_matrix_to_csv(submit_id_col=pre.X_id_submit, y_cols=pre.y_cols)
+pickle.dump(modelbuilder.best_mat, open(output_folder + "best_matrix.pickle", 'wb'))
+
+
 bce_before = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=modelbuilder.average_pred)
 bce_after = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=modelbuilder.best_mat)
 print("Binary crossentropy average across models before row weights: ", bce_before)
 print("Binary crossentropy average across models after row weights: ", bce_after)
+#%%
+
+
+def plot_targets_to_zero(bottom_n_cols):
+    lis_num = []
+    lis_val = []
+
+    for i in range(1, bottom_n_cols):
+
+        best_mat2 = pickle.load(open(output_folder + "best_matrix.pickle", 'rb')).copy()
+       
+        y2 = modelbuilder.y
+        y_test2 = modelbuilder.y_test
+        
+        #Create df with label counts per column
+        count_target_df = pd.DataFrame(y2.sum(axis=0), columns=["target count"]).sort_values(ascending=False, by="target count")
+        
+        bottom_X_labels = count_target_df["target count"][-i:].index
+
+        pd.DataFrame(y2.sum(axis=0), columns=["target count"]).sort_values(ascending=False, by="target count")
+        
+
+        best_mat2 = pd.DataFrame(best_mat2, columns=y2.columns)
+        print(best_mat2.sum(axis=0).value_counts())
+        best_mat2[bottom_X_labels] = 0
+        print(best_mat2.sum(axis=0).value_counts())
+
+        count_2 = pd.DataFrame(best_mat2.sum(axis=0), columns=["target count"]).sort_values(ascending=False, by="target count")
+        bce2 = modelbuilder.calc_bce(y_true=np.array(y_test2).astype(float), y_pred=best_mat2)
+        
+        lis_num.append(i)
+        lis_val.append(bce2)
+
+    sns.lineplot(x=lis_num, y=lis_val)
+
+plot_targets_to_zero(bottom_n_cols=50)
+#%%
+
+
+  
 #%%
 #------------------------ Exporatory Data Analysis ------------------------#
 #Show distribution of amount of labels per ROW
@@ -814,9 +870,7 @@ def create_more_random_models(n_rand_models):
 
     #Save randomly generated models
     if path.exists(rand_model_path):
-        
-        with open(rand_model_path, 'rb') as f:
-            model_list = pickle.load(f)
+        model_list = pickle.load(open(rand_model_path, 'rb'))
         print(len(model_list), " model already existed. Adding to existing models...")
     else:
         print("No models exist yet, creating model file...")
@@ -831,8 +885,7 @@ def create_more_random_models(n_rand_models):
     model_list.sort(key=lambda x: x[1])
 
     #Save model parameters and losses
-    with open(rand_model_path, 'wb') as f:
-        pickle.dump(model_list, f)
+    pickle.dump(model_list, open(rand_model_path, 'wb'))
 
 #=====================================================================================#
 #================================= Execute main code =================================#
