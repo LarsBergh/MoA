@@ -59,18 +59,18 @@ G_VAR_REQ = None
 C_PCA_REQ = 5 #Max 100
 G_PCA_REQ = 30 #Max 772
 
-create_random_param_models = False #Create extra models instead of using existing models
-N_RAND_MODELS = 8
+create_random_param_models = False #Create extra softmax target probability prediction models and save them to pickle object 
+N_RAND_MODELS = 2 #Number of extra models to add to pickle object.
 
 use_preset_params = True #Uses pre-defined perameters in the code
 n_ensemble_models = 1 #Define how many out of the best models should be used in ensemble
 n_ensemble_w = 1 #Defines how many of the top row weight array should be used in ensemble
 
-#Encoding type --> "map", "dummy"
+#Encoding type --> "map"
 ENC_TYPE = "map"
 
 #Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
-SC_TYPE = "quantile_uniform"
+SC_TYPE = "quantile_normal"
 
 #Set random seed
 RANDOM_STATE = 0
@@ -97,10 +97,6 @@ if is_kaggle == True:
 else:
     data_folder = "data/"
     output_folder = "output/"
-
-X = pd.read_csv(data_folder + "train_features.csv")
-y = pd.read_csv(data_folder + "train_targets_scored.csv")
-X_submit = pd.read_csv(data_folder + "test_features.csv")
 
 
 #------------------------ Classes ------------------------#
@@ -153,16 +149,7 @@ class Preprocessor:
         print("X, y, X_submit shape after id remove: ", self.X.shape, self.y.shape, self.X_submit.shape)
 
     def encode_df(self, encoder_type):
-        #Encode columns as dummy variables
-        if encoder_type == "dummy":            
-            self.X = pd.concat([self.X.get_dummies(self.X[self.encode_cols], columns=self.encode_cols), self.X[~self.encode_cols]],axis=1)
-            self.X.drop(self.encode_cols, axis=1)
-
-            self.X_submit = pd.concat([self.X_submit.get_dummies(self.X_submit[self.encode_cols], columns=self.encode_cols), self.X_submit[~self.encode_cols]],axis=1)
-            self.X_submit.drop(self.encode_cols, axis=1)
-
-        #Map values to encodable columns
-        elif encoder_type == "map":           
+        if encoder_type == "map":           
             self.X['cp_type'] = self.X['cp_type'].map({"ctl_vehicle": 0, "trt_cp": 1})
             self.X['cp_time'] = self.X['cp_time'].map({24: 0, 48: 0.5, 72: 1})
             self.X['cp_dose'] = self.X['cp_dose'].map({'D1': 0, 'D2': 1})
@@ -172,25 +159,26 @@ class Preprocessor:
             self.X_submit['cp_dose'] = self.X_submit['cp_dose'].map({'D1': 0, 'D2': 1})
 
     def scale_df(self, scaler_type):
-        X_cat = self.X[self.encode_cols]
-        X_scale = self.X[self.X.columns.difference(self.encode_cols)]
-        X_submit_cat  = self.X_submit[self.encode_cols]
-        X_submit_scale = self.X_submit[self.X_submit.columns.difference(self.encode_cols)]
+        if scaler_type != "None":
+            X_cat = self.X[self.encode_cols]
+            X_scale = self.X[self.X.columns.difference(self.encode_cols)]
+            X_submit_cat  = self.X_submit[self.encode_cols]
+            X_submit_scale = self.X_submit[self.X_submit.columns.difference(self.encode_cols)]
 
-        #https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-col_plot-all-scaling-py
-        scaler = {
-            "standardize" : StandardScaler(), # gives values 0 mean and unit variance
-            "normalize" : MinMaxScaler(), # scales values between 0 and 1
-            "quantile_normal" : QuantileTransformer(output_distribution="normal"), #non-linear, maps probability density to uniform distribution
-            "quantile_uniform" : QuantileTransformer(output_distribution="uniform"), #matches values to gaussian distribution
-            "power": PowerTransformer(method="yeo-johnson"), # stabilizes variance, minimizes skewness, applies zero mean unit variance also
-            "robust" : RobustScaler() #scaling robust to outliers. removes median, scales data to IQR 
-        }
+            #https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-col_plot-all-scaling-py
+            scaler = {
+                "standardize" : StandardScaler(), # gives values 0 mean and unit variance
+                "normalize" : MinMaxScaler(), # scales values between 0 and 1
+                "quantile_normal" : QuantileTransformer(output_distribution="normal"), #non-linear, maps probability density to uniform distribution
+                "quantile_uniform" : QuantileTransformer(output_distribution="uniform"), #matches values to gaussian distribution
+                "power": PowerTransformer(method="yeo-johnson"), # stabilizes variance, minimizes skewness, applies zero mean unit variance also
+                "robust" : RobustScaler() #scaling robust to outliers. removes median, scales data to IQR 
+            }
 
-        sc = scaler[scaler_type]       
-        self.X = pd.concat([X_cat, pd.DataFrame(sc.fit_transform(X_scale), columns=X_scale.columns)], axis=1)
-        self.X_submit = pd.concat([X_submit_cat, pd.DataFrame(sc.fit_transform(X_submit_scale), columns=X_submit_scale.columns)], axis=1)
-        print("Scaler used: ", sc, " to scale X and X_submit")
+            sc = scaler[scaler_type]       
+            self.X = pd.concat([X_cat, pd.DataFrame(sc.fit_transform(X_scale), columns=X_scale.columns)], axis=1)
+            self.X_submit = pd.concat([X_submit_cat, pd.DataFrame(sc.fit_transform(X_submit_scale), columns=X_submit_scale.columns)], axis=1)
+        print("Scaler used: ", scaler_type, " to scale X and X_submit")
 
 class Plotter():
     def __init__(self, X, y, plot_path):
@@ -305,6 +293,9 @@ class Plotter():
         #Split into cell and gene skew/kurtosis df
         self.gene_df = skew_kurt_df.loc["g-0":"g-771", :]
         self.cell_df = skew_kurt_df.loc["c-0":"c-99",:]
+        print("Cell df: ", self.cell_df)
+        print("Gene df: ", self.gene_df)
+        print("Df X: ", self.X)
 
     #Plot skew and kurtosis for gene/cell cols
     def plot_skew_kurtosis(self):
@@ -382,11 +373,11 @@ class ModelBuilder():
     def select_random_parameters(self, n_param_sets):
         
         #Defines the allowed search space
-        layers = [3,4,5]
+        layers = [2,3,4,5]
         acti_hid = ["elu", "relu", "sigmoid", "softplus", "softsign"] 
         dropout = [0.15, 0.20, 0.25]
         neurons = [64, 96, 128]
-        optimizers = ["nadam", "adam", SGD(lr=0.05, momentum=0.95), SGD(lr=0.05, momentum=0.98), "rmsprop"]
+        optimizers = ["nadam", "adam", SGD(lr=0.05, momentum=0.98), AdamW(weight_decay=0.0001), "rmsprop"]
 
         #Create dictionary of the given parameters
         param_dic = {"lay": layers, "acti_hid": acti_hid, "neur": neurons, 
@@ -407,7 +398,38 @@ class ModelBuilder():
             if rand_param_dic not in rand_params:
                 rand_params.append(rand_param_dic)
         
-        self.rand_params = rand_params
+        return rand_params
+
+    def create_more_random_models(self, n_rand_models, output_folder):
+        rand_model_path = output_folder + 'random_models.pickle'
+
+        param_sets = self.select_random_parameters(n_param_sets=n_rand_models)
+
+        model_list = []
+
+        #Save randomly generated models
+        if path.exists(rand_model_path):
+            model_list = pickle.load(open(rand_model_path, 'rb'))
+            print(len(model_list), " model already existed. Adding to existing models...")
+        else:
+            print("No models exist yet, creating model file...")
+
+        #Split dataset
+        X_train, X_val, y_train, y_val = train_test_split(self.X, self.y, test_size=0.2, random_state=self.random_state)
+        X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=self.random_state)
+        
+        #Loop over created param sets and create new model if param combination does not exist
+        for params in param_sets:
+            if params not in [row[0] for row in model_list]:
+                model, test_loss, hist = self.create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=params)    
+                model_list.append([params, test_loss])
+
+        #Sort models based on loss
+        model_list.sort(key=lambda x: x[1])
+
+        #Save model parameters and losses
+        pickle.dump(model_list, open(rand_model_path, 'wb'))
+
 
     def upsample(self, X_train, y_train, min_target_count, random_state):
         #Upsample the training data
@@ -438,8 +460,9 @@ class ModelBuilder():
         return  X_train, y_train
 
 
-    def create_baseline(self):
+    def create_baseline(self, random_state):
         """Creates a baseline model to which more advanced models can be compared"""
+        tf.random.set_seed(random_state)
 
         X_train, X_val, y_train, y_val = train_test_split(self.X, self.y, test_size=0.2, random_state=self.random_state)
         X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=self.random_state)
@@ -450,8 +473,11 @@ class ModelBuilder():
         model.add(Dense(64, activation='relu')) 
         model.add(Dense(206, activation='softmax')) 
         model.compile(optimizer="adam", loss='binary_crossentropy', metrics=["binary_crossentropy"]) 
-        model.fit(X_train, y_train, batch_size=4, epochs=15, validation_data=(X_val, y_val))
+
+        early_stop = EarlyStopping(monitor='val_loss', patience=1, mode='auto')
+        model.fit(X_train, y_train, batch_size=4, epochs=15, validation_data=(X_val, y_val), callbacks=[early_stop])
         results = model.evaluate(X_test, y_test, batch_size=8)
+        return results[0]
 
     def create_model(self, X_train, y_train, X_val, y_val, X_test, y_test, param_dic):
         """Creates a multilayer perceptron with the given parameter dictionary and data"""
@@ -678,32 +704,83 @@ class ModelBuilder():
         """Calculates Binary Crossentropy for predicted and true matrices"""
         bce = tf.keras.losses.BinaryCrossentropy()
         return bce(y_true, y_pred).numpy()
+#%%
+    def plot_targets_to_zero(self, bottom_n_cols):
+        lis_num = []
+        lis_val = []
 
-    def targets_to_zero(self, bottom_n_cols):
-        #Create df with label counts per column
-        count_target_df = pd.DataFrame(self.y.sum(axis=0).sort_values(ascending=False), columns=["target count"])
-        
-        #print top 50 targets as pecentage of total targets
-        bottom_50_labels = count_target_df["target count"][-50:].index
+        for i in range(1, bottom_n_cols):
+            
+            #Create df with label counts per column
+            count_target_df = pd.DataFrame(self.y.sum(axis=0), columns=["target count"]).sort_values(ascending=False, by="target count")
+            
+            #Grab bottom X target names (X least target occurances)
+            bottom_X_labels = count_target_df["target count"][-i:].index
+            
+            #Turn best matrix back into a pandas dataframe
+            best_mat = pd.DataFrame(self.best_mat, columns=self.y.columns)
+            #print(best_mat.sum(axis=0).value_counts())
 
-        df = self.best_mat      
-        df[df[bottom_50_labels]] = 0
-        count_zero_cols = 0
-        for col in df.columns:
-            if df[col].sum() == 0:
-                count_zero_cols += 1
-        print("amount of cols zero:", count_zero_cols)   
+            #Set bottom X target occurances to zero
+            best_mat[bottom_X_labels] = 0
+            #print(best_mat.sum(axis=0).value_counts())
+            
+            #Calculate binary cross-entropy for the 
+            bce = modelbuilder.calc_bce(y_true=np.array(self.y_test).astype(float), y_pred=best_mat)
+            
+            #Append amount of dropped target columns and respective binary cross entropies for each drop
+            lis_num.append(i)
+            lis_val.append(bce)
+
+        #Plot number of target columns dropped to zero, compare to bce
+        fig, axs = plt.subplots(1,1, figsize=(7,5))
+        drop_target_plot = sns.lineplot(x=lis_num, y=lis_val)
+        plt.xlabel('Amount of target predictions set to zero', fontsize=18)
+        plt.ylabel("Binary crossentropy value", fontsize=18)
+        drop_target_plot.set_title('Binary cross-entropy for least represented classes to zero probability')
+        plt.tight_layout()
+        fig.savefig(output_folder + "dropping_targets.jpg") 
    
-
+#%%
     def best_matrix_to_csv(self, submit_id_col, y_cols):
         """Writes the submit prediction matrix to a csv file"""
         submit_df = np.concatenate((np.array(submit_id_col).reshape(-1,1), self.best_submit_mat), axis=1)
         pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
 #%%
+#------------------------ Test various scalers ------------------------#
+if compute_baseline == True:
+    scaling_results = []
+    for scale_type in ["None", "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"]:
+        #------------------------ Load data ------------------------#
+        X = pd.read_csv(data_folder + "train_features.csv")
+        y = pd.read_csv(data_folder + "train_targets_scored.csv")
+        X_submit = pd.read_csv(data_folder + "test_features.csv")
+
+        #------------------------ Init preprocessor ------------------------#
+        pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
+        pre.drop_id()
+
+        #------------------------ Encode and scale X data ------------------------#
+        pre.encode_df(encoder_type=ENC_TYPE)
+        pre.scale_df(scaler_type=scale_type)
+
+        #------------------------ Build models ------------------------#
+        modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
+                            random_state=RANDOM_STATE, is_kaggle=is_kaggle)
+        RANDOM_STATE
+        scaling_results.append([scale_type, modelbuilder.create_baseline(random_state=RANDOM_STATE)])
+
+    scaling_results.sort(key=lambda x:x[1])
+    print(scaling_results)
+    sys.exit()
+#%%
+
+X = pd.read_csv(data_folder + "train_features.csv")
+y = pd.read_csv(data_folder + "train_targets_scored.csv")
+X_submit = pd.read_csv(data_folder + "test_features.csv")
+
 #------------------------ Init preprocessor ------------------------#
 pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
-#pre.upsample(min_target_count=100, random_state=RANDOM_STATE)
-
 pre.drop_id()
 
 #------------------------ Plot graphs ------------------------#
@@ -729,25 +806,39 @@ if plot_graps == True:
 #------------------------ Encode and scale X data ------------------------#
 pre.encode_df(encoder_type=ENC_TYPE)
 pre.scale_df(scaler_type=SC_TYPE)
-#%%
+
 #------------------------ Build models ------------------------#
 modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
                             random_state=RANDOM_STATE, is_kaggle=is_kaggle)
 
-if compute_baseline == True:
-    modelbuilder.create_baseline()
-    sys.exit()
+#%%
+if create_random_param_models == True:
+    modelbuilder.create_more_random_models(n_rand_models=N_RAND_MODELS, output_folder=output_folder)
 
+model_list = pickle.load(open(output_folder + "random_models.pickle", 'rb'))
+print("Random model list model amount: ", len(model_list), " models: ", model_list)
+
+#%%
+#Get best 5 models for ensemble
+print(model_list[:5])
 #Create an K-folded ensemble model of either preset params or read_params
-model_1_params = {'lay': 4, 'acti_hid': 'softplus', 'neur': 96, 'drop': 0.15, 'opti': 'adam'} 
-model_2_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.2, 'opti': SGD(lr=0.05, momentum=0.95)} 
-model_3_params = {'lay': 5, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.15, 'opti': 'adam'} 
-model_4_params = {'lay': 4, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.1, 'opti': 'nadam'}
-model_5_params = {'lay': 3, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.15, 'opti': 'adam'}
-#model_params = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
-model_params = [model_1_params, model_2_params]
+model_1_params = {'lay': 2, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.2, 'opti': AdamW(weight_decay=0.0001)}  #0.016530431807041168
+model_2_params = {'lay': 2, 'acti_hid': 'elu', 'neur': 128, 'drop': 0.25, 'opti': AdamW(weight_decay=0.0001)} #0.01658029295504093
+model_3_params = {'lay': 2, 'acti_hid': 'sigmoid', 'neur': 96, 'drop': 0.25, 'opti': AdamW(weight_decay=0.0001)} #0.016617590561509132
+model_4_params = {'lay': 4, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.2, 'opti': 'adam'} #0.016619844362139702
+model_5_params = {'lay': 3, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'} #0.016632817685604095
 
-model_6_params = {'lay': 10, 'acti_hid': 'elu', 'neur': 1024, 'drop': 0.5, 'opti': 'adam'}
+
+
+
+#%%
+
+
+#model_params = [model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
+model_1_params = {'lay': 10, 'acti_hid': 'elu', 'neur': 1024, 'drop': 0.5, 'opti': 'adam'}
+model_params = [model_1_params]
+
+
 
 row_weight_params_1 = {'lay': 4, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'}
 row_weight_params_2 = {'lay': 3, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.25, 'opti': 'adam'}
@@ -762,48 +853,14 @@ modelbuilder.create_model_ensemble(n_folds=N_FOLDS, n_ensemble_models=n_ensemble
 modelbuilder.compute_best_matrix()
 modelbuilder.best_matrix_to_csv(submit_id_col=pre.X_id_submit, y_cols=pre.y_cols)
 pickle.dump(modelbuilder.best_mat, open(output_folder + "best_matrix.pickle", 'wb'))
-
+modelbuilder.plot_targets_to_zero(bottom_n_cols=50)
 
 bce_before = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=modelbuilder.average_pred)
 bce_after = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=modelbuilder.best_mat)
 print("Binary crossentropy average across models before row weights: ", bce_before)
 print("Binary crossentropy average across models after row weights: ", bce_after)
-#%%
+modelbuilder.plot_targets_to_zero(bottom_n_cols=50)
 
-
-def plot_targets_to_zero(bottom_n_cols):
-    lis_num = []
-    lis_val = []
-
-    for i in range(1, bottom_n_cols):
-
-        best_mat2 = pickle.load(open(output_folder + "best_matrix.pickle", 'rb')).copy()
-       
-        y2 = modelbuilder.y
-        y_test2 = modelbuilder.y_test
-        
-        #Create df with label counts per column
-        count_target_df = pd.DataFrame(y2.sum(axis=0), columns=["target count"]).sort_values(ascending=False, by="target count")
-        
-        bottom_X_labels = count_target_df["target count"][-i:].index
-
-        pd.DataFrame(y2.sum(axis=0), columns=["target count"]).sort_values(ascending=False, by="target count")
-        
-
-        best_mat2 = pd.DataFrame(best_mat2, columns=y2.columns)
-        print(best_mat2.sum(axis=0).value_counts())
-        best_mat2[bottom_X_labels] = 0
-        print(best_mat2.sum(axis=0).value_counts())
-
-        count_2 = pd.DataFrame(best_mat2.sum(axis=0), columns=["target count"]).sort_values(ascending=False, by="target count")
-        bce2 = modelbuilder.calc_bce(y_true=np.array(y_test2).astype(float), y_pred=best_mat2)
-        
-        lis_num.append(i)
-        lis_val.append(bce2)
-
-    sns.lineplot(x=lis_num, y=lis_val)
-
-plot_targets_to_zero(bottom_n_cols=50)
 #%%
 
 
@@ -832,26 +889,29 @@ def pca(df, df_sub, pca_type, var_req=None, num_req=None):
     cols = []
     comp = None
     
+    #Checks if there is a minimimum PCA component amount needed
     if num_req != None: 
         for_len = num_req
         comp = num_req
 
+    #Checks if there is a minimimum explained variance requirement 
     elif var_req != None:
         for_len = len(var_pca)
 
-    for pc in range(0, for_len): 
+    #For each
+    for principal_comp_nr in range(0, for_len): 
 
         if pca_type == "gene":
-            cols.append('g-' + str(pc))
+            cols.append('g-' + str(principal_comp_nr))
 
         elif pca_type == "cell":
-            cols.append('c-' + str(pc))
+            cols.append('c-' + str(principal_comp_nr))
 
         if var_req != None: 
-            expl_var = np.sum(var_pca[:pc])/tot_var  
+            expl_var = np.sum(var_pca[:principal_comp_nr])/tot_var  
 
             if expl_var > var_req:
-                comp = pc
+                comp = principal_comp_nr
                 break
 
     #Return PCA df
@@ -861,31 +921,7 @@ def pca(df, df_sub, pca_type, var_req=None, num_req=None):
     return X_pca, X_sub_pca
 
 
-def create_more_random_models(n_rand_models):
-    rand_model_path = output_folder + 'random_models.pickle'
 
-    param_sets = select_random_parameters(n_param_sets=n_rand_models)
-
-    model_list = []
-
-    #Save randomly generated models
-    if path.exists(rand_model_path):
-        model_list = pickle.load(open(rand_model_path, 'rb'))
-        print(len(model_list), " model already existed. Adding to existing models...")
-    else:
-        print("No models exist yet, creating model file...")
-
-    #Loop over created param sets and create new model if param combination does not exist
-    for params in param_sets:
-        if params not in [row[0] for row in model_list]:
-            model, loss = create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=params)    
-            model_list.append([params, loss])
-
-    #Sort models based on loss
-    model_list.sort(key=lambda x: x[1])
-
-    #Save model parameters and losses
-    pickle.dump(model_list, open(rand_model_path, 'wb'))
 
 #=====================================================================================#
 #================================= Execute main code =================================#
