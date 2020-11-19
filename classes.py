@@ -1,4 +1,6 @@
 #%%
+#Import libraries
+#from classes import Preprocessor, Plotter, ModelBuilder
 import sys
 import time
 import random
@@ -29,72 +31,6 @@ from tensorflow_addons.optimizers import AdamW
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer, PowerTransformer, RobustScaler
-
-#------------------------ Package versions ------------------------#
-#Print versions for "Language and Package section of report"
-print("numpy version: ", np.__version__)
-print("pandas version: ", pd.__version__)
-print("tensorflow version: ", tf.__version__)
-print("tensorflow addons version: ", tfa.__version__)
-print("seaborn version: ", sns.__version__)
-print("matplotlib version: ", m.__version__)
-print("sklearn version: ", sk.__version__)
-#%%
-
-#------------------------ Model settings ------------------------#
-is_kaggle = False #Set to true if making upload to kaggle
-
-test_scalers = False #Set to true to ONLY compute baseline model with various scalers.
-
-test_pca = False #Sets various PCA component settings and their corresponding loss
-C_PCA_REQ = 5 #Max 100 cell components
-G_PCA_REQ = 30 #Max 772 cell components
-
-plot_graps = False #Set to true if plots should be created
-
-N_FOLDS = 2 #Determines how many folds are used for K-fold
-
-use_upsampling = False
-
-create_random_param_models = False #Create extra softmax target probability prediction models and save them to pickle object 
-create_random_row_models = True
-N_RAND_MODELS = 2 #Number of extra models to add to pickle object.
-
-use_preset_params = True #Uses pre-defined perameters in the code
-n_ensemble_models = 1 #Define how many out of the best models should be used in ensemble
-n_ensemble_w = 1 #Defines how many of the top row weight array should be used in ensemble
-
-#Encoding type --> "map"
-ENC_TYPE = "map"
-
-#Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
-SC_TYPE = "quantile_normal"
-
-#Set random seed
-RANDOM_STATE = 0
-
-print("Printing model settings....")
-print("Plot graphs: ", plot_graps)
-print("Encoding type: ", ENC_TYPE)
-print("Scaling type: ", SC_TYPE)
-
-#------------------------ Loading data ------------------------#
-#Description of task	Predicting a receptor respons based on gene expression, cell viability, drug, dose, and treatment type
-#cp_type	        trt_cp (treatment), ctl_vehicle (control group)
-#cp_time	        treatment duration (24, 48, 72 hours)
-#cp_dose	        dose of drug (high, low)
-#c-	                cell viability data
-#g-	                gene expression data
-#%%
-if is_kaggle == True:
-    data_folder = "/kaggle/input/lish-moa/"
-    output_folder = "/kaggle/working/"
-    if os.path.exists("/kaggle/working/submission.csv"):
-        os.remove("/kaggle/working/submission.csv")
-else:
-    data_folder = "data/"
-    output_folder = "output/"
-
 
 #------------------------ Classes ------------------------#
 class Preprocessor:
@@ -407,9 +343,12 @@ class ModelBuilder():
         #Defines the allowed search space
         layers = [2,3,4,5]
         acti_hid = ["elu", "relu", "sigmoid", "softplus", "softsign"] 
+        #dropout = [0.15, 0.20, 0.25, 0.3, 0.35, 0.4]
         dropout = [0.15, 0.20, 0.25]
-        neurons = [64, 96, 128]
-        optimizers = ["nadam", "adam", SGD(lr=0.05, momentum=0.98), AdamW(weight_decay=0.0001), "rmsprop"]
+        #neurons = [64, 96, 128, 160, 192, 224]
+        neurons = [64, 96, 128, 160]
+        #optimizers = ["nadam", "adam", SGD(lr=0.05, momentum=0.98), AdamW(weight_decay=0.0001), "rmsprop"]
+        optimizers = ["nadam", "adam", AdamW(weight_decay=0.0001)]
 
         #Create dictionary of the given parameters
         param_dic = {"lay": layers, "acti_hid": acti_hid, "neur": neurons, 
@@ -432,17 +371,16 @@ class ModelBuilder():
         
         return rand_params
 
-    def create_more_random_models(self, n_rand_models, output_folder, weight_or_matrix):
+    def create_more_random_models(self, n_folds, random_state, n_rand_models, output_folder, weight_or_matrix):
         rand_model_path = output_folder
         model_list = []
 
+        #Set path for random model objects
         if weight_or_matrix == "weight":
             rand_model_path += 'random_weights.pickle'
 
         elif weight_or_matrix == "matrix":
             rand_model_path += 'random_models.pickle'
-
-        param_sets = self.select_random_parameters(n_param_sets=n_rand_models)
 
         #Save randomly generated models
         if path.exists(rand_model_path):
@@ -452,26 +390,29 @@ class ModelBuilder():
         else:
             print("No models exist yet, creating model file...")
 
-        #Split dataset
-        X_train, X_val, y_train, y_val = train_test_split(self.X, self.y, test_size=0.2, random_state=self.random_state)
-        X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=self.random_state)
+        param_sets = self.select_random_parameters(n_param_sets=n_rand_models)
         
+        tf.random.set_seed(random_state)
+       
+        loss = 0
+
         #Loop over created param sets and create new model if param combination does not exist
-        for params in param_sets:
+        for params in param_sets:         
+
             if params not in [row[0] for row in model_list]:
                 if weight_or_matrix == "matrix":
-                    model, test_loss, hist = self.create_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=params)    
-                elif weight_or_matrix == "weight":
-                    model, test_loss, hist = self.create_row_model(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, X_test=X_test, y_test=y_test, param_dic=params)    
+                    loss = self.k_fold_model(n_folds=n_folds, model_params=params)
 
-                model_list.append([params, test_loss])
+                elif weight_or_matrix == "weight":
+                    loss = self.k_fold_weights(n_folds=n_folds, row_weight_params=params)
+                    
+                model_list.append([params, loss])
 
         #Sort models based on loss
         model_list.sort(key=lambda x: x[1])
 
         #Save model parameters and losses
-        pickle.dump(model_list, open(rand_model_path, 'wb'))
-
+        pickle.dump(model_list, open(rand_model_path, 'wb'))           
 
     def upsample(self, X_train, y_train, min_target_count, random_state):
         #Upsample the training data
@@ -502,24 +443,44 @@ class ModelBuilder():
         return  X_train, y_train
 
 
-    def create_baseline(self, random_state):
+    def create_baseline(self, random_state, n_folds, use_upsampling=None):
         """Creates a baseline model to which more advanced models can be compared"""
+
         tf.random.set_seed(random_state)
         print("baseline created with X shape: ", self.X.shape, self.X.iloc[:5,:])
-        X_train, X_val, y_train, y_val = train_test_split(self.X, self.y, test_size=0.2, random_state=self.random_state)
-        X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.25, random_state=self.random_state)
 
-        print("Creating baseline model....")
-        model = Sequential()
-        model.add(Dense(64, activation='relu'))
-        model.add(Dense(64, activation='relu')) 
-        model.add(Dense(206, activation='softmax')) 
-        model.compile(optimizer="adam", loss='binary_crossentropy', metrics=["binary_crossentropy"]) 
+        print("Splitting data to aquire test set....")
+        X, X_test, y, y_test = train_test_split(self.X, self.y, test_size=0.2, random_state=self.random_state)
 
-        early_stop = EarlyStopping(monitor='val_loss', patience=1, mode='auto')
-        model.fit(X_train, y_train, batch_size=4, epochs=15, validation_data=(X_val, y_val), callbacks=[early_stop])
-        results = model.evaluate(X_test, y_test, batch_size=8)
-        return results[0]
+        test_loss = 0
+
+        #Split data into train and test. train will be splitted later in K-fold
+        for train_i, test_i in KFold(n_splits=n_folds, shuffle=True, random_state=self.random_state).split(X):
+                
+            #Define train and test for Kfolds
+            X_train = X.iloc[train_i,:]
+            X_val = X.iloc[test_i, :]
+            y_train = y.iloc[train_i, :]
+            y_val = y.iloc[test_i, :]
+
+            if use_upsampling == True:
+                X_train, y_train = self.upsample(X_train=X_train, y_train=y_train, 
+                                                min_target_count=100, random_state=self.random_state)
+
+            print("Creating baseline model....")
+            model = Sequential()
+            model.add(Dense(64, activation='relu'))
+            model.add(Dense(64, activation='relu')) 
+            model.add(Dense(206, activation='softmax')) 
+            model.compile(optimizer="adam", loss='binary_crossentropy', metrics=["binary_crossentropy"]) 
+
+            early_stop = EarlyStopping(monitor='val_loss', patience=1, mode='auto')
+            model.fit(X_train, y_train, batch_size=4, epochs=40, validation_data=(X_val, y_val), callbacks=[early_stop])
+            results = model.evaluate(X_test, y_test, batch_size=8)
+            test_loss += results[0]/n_folds
+
+        return test_loss
+
 
     def create_model(self, X_train, y_train, X_val, y_val, X_test, y_test, param_dic):
         """Creates a multilayer perceptron with the given parameter dictionary and data"""
@@ -559,7 +520,7 @@ class ModelBuilder():
 
     def create_row_model(self, X_train, y_train, X_val, y_val, X_test, y_test, param_dic):
         """Creates a multilayer perceptron with the given parameter dictionary and data"""
-        
+        print(param_dic)
         #Print model parameters
         print("Creating row model with:")
         print("Hidden layer count: ", param_dic["lay"])
@@ -594,7 +555,7 @@ class ModelBuilder():
         
         return model, test_loss, hist.history
 
-    def k_fold_model(self, n_folds, model_params, min_target_count, use_upsampling):
+    def k_fold_model(self, n_folds, model_params):
         """Runs n_fold cross validation by creating multiple models with the create model function"""
 
         print("Splitting data to aquire test set....")
@@ -606,7 +567,7 @@ class ModelBuilder():
         self.y_test = y_test
 
         #Set loss parameter  
-        test_loss = 0
+        av_loss = 0
 
         #Split data into train and test. train will be splitted later in K-fold
         for train_i, test_i in KFold(n_splits=n_folds, shuffle=True, random_state=self.random_state).split(X):
@@ -617,22 +578,19 @@ class ModelBuilder():
             y_train = y.iloc[train_i, :]
             y_val = y.iloc[test_i, :]
 
-            if use_upsampling == True:
-                X_train, y_train = self.upsample(X_train=X_train, y_train=y_train, 
-                                                min_target_count=min_target_count, random_state=self.random_state)
-
             #Create a model for each split (validation and test untouched by upsampling)
             model, test_loss, hist = self.create_model(X_train=X_train, X_val=X_val, 
                                                 y_train=y_train, y_val=y_val, 
                                                 X_test=X_test, y_test=y_test,
                                                 param_dic=model_params)                                    
             
+            av_loss += test_loss/n_folds
             self.average_pred += np.array(model.predict(X_test)/n_folds)
             self.average_pred_submit += np.array(model.predict(X_submit)/n_folds)
             self.history = hist
-
+        return av_loss
     #------------------------ Calculating row weights ------------------------#
-    def k_fold_weights(self, n_folds, row_weight_params, min_target_count, use_upsampling):
+    def k_fold_weights(self, n_folds, row_weight_params):
         """Predicts row weights for the prediction matrices by training a model that minimizes the absolute error of the amount of targets per row in X_train"""
 
         print("Splitting data to aquire test set....")
@@ -642,6 +600,8 @@ class ModelBuilder():
         self.y_pred_weights = np.zeros((y_test.shape[0], 1))
         self.y_submit_weights = np.zeros((self.X_submit.shape[0], 1))
         
+        av_loss = 0
+
         #Split data into train and test. train will be splitted later in K-fold
         for train_i, test_i in KFold(n_splits=n_folds, shuffle=True, random_state=self.random_state).split(X):
                 
@@ -651,11 +611,6 @@ class ModelBuilder():
             y_train = y.iloc[train_i]
             y_val = y.iloc[test_i]
 
-            #Upsample train data if true
-            if use_upsampling == True:
-                X_train, y_train = self.upsample(X_train=X_train, y_train=y_train, 
-                                                min_target_count=min_target_count, random_state=self.random_state)
-
             #Create model to predict amount of targets per row              
             model, test_loss, hist  = self.create_row_model(X_train=X_train, X_val=X_val, 
                                                                    y_train=y_train, y_val=y_val, 
@@ -663,10 +618,12 @@ class ModelBuilder():
                                                                    param_dic=row_weight_params)  
 
             #Adjust weight arrays for the amount of folds
+            av_loss += test_loss/n_folds
             self.y_pred_weights += model.predict(X_test).clip(min=0)/n_folds
             self.y_submit_weights += model.predict(self.X_submit).clip(min=0)/n_folds
+        return av_loss
 
-    def create_model_ensemble(self, n_ensemble_models, n_folds, min_target_amount, use_upsampling, model_params=None, row_weight_params=None):
+    def create_model_ensemble(self, n_ensemble_models, n_folds, model_params=None, row_weight_params=None):
         """Creates an ensemble model by applying K-fold cross validation to a given list of parameters"""
 
         #Use given preset parameters or use parameters from given object
@@ -680,23 +637,20 @@ class ModelBuilder():
         #For each set of parameters, create a model and make an average prediction across all ensemble models
         for model_i, model_param in enumerate(model_params):
             print("Running K_fold on model: ", model_i + 1, "/", len(model_params))
-            self.k_fold_model(n_folds=n_folds, model_params=model_param, 
-                              min_target_count=min_target_amount,
-                              use_upsampling=use_upsampling)
+            self.k_fold_model(n_folds=n_folds, model_params=model_param)                              
 
         #Adjust sum of prediction matrices by the amount of parameter dictionaries used for the ensemble
         self.average_pred = self.average_pred/len(model_params)
         self.average_pred_submit = self.average_pred_submit/len(model_params)
 
-        #Get the parameters for row weight models 
-        if row_weight_params == None:
-            row_weight_params = self.select_random_parameters(n_param_sets=n_param_sets)
-
         #Run K-fold over each parameter set calculating an average weight array per parameter set
         for row_weight_i, row_weight_param in enumerate(row_weight_params):
             print("Creating the following num of weight arrays: ", len(row_weight_params))
-            self.k_fold_weights(n_folds=n_folds, row_weight_params=row_weight_param, 
-            min_target_count=min_target_amount, use_upsampling=use_upsampling)
+            self.k_fold_weights(n_folds=n_folds, row_weight_params=row_weight_param)
+        
+        #Adjust sum of prediction matrices by the amount of parameter dictionaries used for the ensemble
+        self.y_pred_weights = self.y_pred_weights/len(row_weight_params)
+        self.y_submit_weights = self.y_submit_weights/len(row_weight_params)
 
     def calc_average_row_weight(self, pred_w, submit_w, param_sets, n_ensemble_w):
         """Calculates the average row weights, based on lists of row weights and the amount of ensembles to be used for the model"""
@@ -784,7 +738,64 @@ class ModelBuilder():
         """Writes the submit prediction matrix to a csv file"""
         submit_df = np.concatenate((np.array(submit_id_col).reshape(-1,1), self.best_submit_mat), axis=1)
         pd.DataFrame(submit_df).to_csv(path_or_buf=output_folder + "submission.csv", index=False, header=y_cols)
+
+
 #%%
+#------------------------ Package versions ------------------------#
+#Print versions for "Language and Package section of report"
+print("numpy version: ", np.__version__)
+print("pandas version: ", pd.__version__)
+print("tensorflow version: ", tf.__version__)
+print("tensorflow addons version: ", tfa.__version__)
+print("seaborn version: ", sns.__version__)
+print("matplotlib version: ", m.__version__)
+print("sklearn version: ", sk.__version__)
+
+#------------------------ Model settings ------------------------#
+is_kaggle = False #Set to true if making upload to kaggle
+
+test_scalers = False #Set to true to ONLY compute baseline model with various scalers.
+
+test_pca = False #Sets various PCA component settings and their corresponding loss
+
+test_upsampling = False #Compares an upsampled dataframe to non-upsampled dataframe on baseline model with k-fold
+
+plot_graps = False #Set to true if plots should be created
+
+N_FOLDS = 2 #Determines how many folds are used for K-fold
+
+create_random_param_models = True #Create extra softmax target probability prediction models and save them to pickle object 
+create_random_row_models = True
+N_RAND_MODELS = 2 #Number of extra models to add to pickle object.
+
+use_preset_params = True #Uses pre-defined perameters in the code
+n_ensemble_models = 2 #Define how many out of the best models should be used in ensemble
+n_ensemble_w = 2 #Defines how many of the top row weight array should be used in ensemble
+
+#Encoding type --> "map"
+ENC_TYPE = "map"
+
+#Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
+SC_TYPE = "quantile_normal"
+
+#Set random seed
+RANDOM_STATE = 0
+
+print("Printing model settings....")
+print("Plot graphs: ", plot_graps)
+print("Encoding type: ", ENC_TYPE)
+print("Scaling type: ", SC_TYPE)
+
+#------------------------ Loading data ------------------------#
+if is_kaggle == True:
+    data_folder = "/kaggle/input/lish-moa/"
+    output_folder = "/kaggle/working/"
+    if os.path.exists("/kaggle/working/submission.csv"):
+        os.remove("/kaggle/working/submission.csv")
+else:
+    data_folder = "data/"
+    output_folder = "output/"
+
 #------------------------ Test various scalers ------------------------#
 if test_scalers == True:
     scaling_results = []
@@ -806,19 +817,54 @@ if test_scalers == True:
         modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
                             random_state=RANDOM_STATE, is_kaggle=is_kaggle)
 
-        scaling_results.append([scale_type, modelbuilder.create_baseline(random_state=RANDOM_STATE)])
+        scaling_results.append([scale_type, modelbuilder.create_baseline(random_state=RANDOM_STATE, n_folds=N_FOLDS)])
 
     scaling_results.sort(key=lambda x:x[1])
     print(scaling_results)
     sys.exit()
+#['quantile_uniform', 0.017554578371345997] 
+#['power', 0.018034077249467373]
+#['standardize', 0.018125144764780998]
+#['None', 0.01817983016371727]
+#['quantile_normal', 0.018644552677869797]
+#['robust', 0.018999390304088593]
+#['normalize', 0.019516831263899803]]
+#%%
+#------------------------ Test upsampling ------------------------#
+if test_upsampling == True:
+    upsampling_results = []
+    for upsampling in [None, True]:
+        #------------------------ Load data ------------------------#
+        X = pd.read_csv(data_folder + "train_features.csv")
+        y = pd.read_csv(data_folder + "train_targets_scored.csv")
+        X_submit = pd.read_csv(data_folder + "test_features.csv")
 
+        #------------------------ Init preprocessor ------------------------#
+        pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
+        pre.drop_id()
+
+        #------------------------ Encode and scale X data ------------------------#
+        pre.encode_df(encoder_type="map")
+        pre.scale_df(scaler_type="None")
+
+        #------------------------ Build models ------------------------#
+        modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
+                            random_state=RANDOM_STATE, is_kaggle=is_kaggle)
+
+        upsampling_results.append([upsampling, modelbuilder.create_baseline(random_state=RANDOM_STATE, n_folds=N_FOLDS, use_upsampling=upsampling)])
+
+    upsampling_results.sort(key=lambda x:x[1])
+    print(upsampling_results)
+    sys.exit()
+#[None, 0.01817983016371727] 
+#[True, 0.023640152998268604]
+#%%
 #------------------------ Test various PCA settings ------------------------#
 if test_pca == True:
     pca_results = []
-    #cell_components = [5, 10, 20, 50, 100] 
-    #gene_components = [25, 50, 100, 200, 772]
-    cell_components = [20] 
-    gene_components = [100]
+    cell_components = [5, 10, 15, 35, 50, 100] 
+    gene_components = [25, 50, 75, 150, 200, 772]
+
     for i in range(len(cell_components)):
         #------------------------ Load data ------------------------#
         X = pd.read_csv(data_folder + "train_features.csv")
@@ -837,17 +883,22 @@ if test_pca == True:
         modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
                             random_state=RANDOM_STATE, is_kaggle=is_kaggle)
     
-        start_time = time.time()
-        test_loss = modelbuilder.create_baseline(random_state=RANDOM_STATE)
-        time_delta = time.time() - start_time
-        pca_results.append([time_delta, cell_components[i], gene_components[i], test_loss])
-        print(pca_results)
-    pca_results = pd.DataFrame(data=pca_results, columns=["training time", "cell_cols", "gene_cols", "test loss"])
+        test_loss = modelbuilder.create_baseline(random_state=RANDOM_STATE, n_folds=N_FOLDS)
+        pca_results.append([cell_components[i], gene_components[i], test_loss])
+    pca_results = pd.DataFrame(data=pca_results, columns=["cell_cols", "gene_cols", "test loss"])
 
     print(pca_results)
     sys.exit()
-#%%
 
+#cell_cols  gene_cols  test loss
+#5          25         0.017841
+#10         50         0.017775
+#15         75         0.017724
+#35         150        0.017826
+#50         200        0.017889
+#100        772        0.017695
+#%%
+#------------------------ Main Code ------------------------#
 X = pd.read_csv(data_folder + "train_features.csv")
 y = pd.read_csv(data_folder + "train_targets_scored.csv")
 X_submit = pd.read_csv(data_folder + "test_features.csv")
@@ -886,19 +937,33 @@ modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit,
 
 #%%
 if create_random_param_models == True:
-    modelbuilder.create_more_random_models(n_rand_models=N_RAND_MODELS, output_folder=output_folder, weight_or_matrix="matrix")
+    modelbuilder.create_more_random_models(n_folds=N_FOLDS, n_rand_models=N_RAND_MODELS, random_state=RANDOM_STATE, output_folder=output_folder, weight_or_matrix="matrix")
 
 if create_random_row_models == True:
-    modelbuilder.create_more_random_models(n_rand_models=N_RAND_MODELS, output_folder=output_folder, weight_or_matrix="weight")
+    modelbuilder.create_more_random_models(n_folds=N_FOLDS, n_rand_models=N_RAND_MODELS, random_state=RANDOM_STATE, output_folder=output_folder, weight_or_matrix="weight")
 
+
+#%%
 model_list = pickle.load(open(output_folder + "random_models.pickle", 'rb'))
 print("Random model list model amount: ", len(model_list), " models: ", model_list)
 
 weight_list = pickle.load(open(output_folder + "random_weights.pickle", 'rb'))
 print("Random weights list model amount: ", len(weight_list), " models: ", weight_list)
+#%%
+print(model_list[:n_ensemble_models+1])
+print(weight_list[:n_ensemble_w+1])
+
+model_1_params = {'lay': 3, 'acti_hid': 'relu', 'neur': 128, 'drop': 0.2, 'opti': AdamW(weight_decay=0.0001)}# 0.016857131384313107] 
+model_2_params = {'lay': 2, 'acti_hid': 'softplus', 'neur': 64, 'drop': 0.3, 'opti': 'adam'}# 0.016873540356755257
+model_params = [model_1_params]
+
+row_weight_params_1 = {'lay': 2, 'acti_hid': 'sigmoid', 'neur': 192, 'drop': 0.3, 'opti': 'nadam'} #0.39536307752132416
+row_weight_params_2 = {'lay': 4, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.3, 'opti': AdamW(weight_decay=0.0001)} #0.40555816888809204
+row_weight_params = [row_weight_params_1, row_weight_params_2]
+
 
 #%%
-#Get best 5 models for ensemble
+"""#Get best 5 models for ensemble
 print(model_list[:5])
 #Create an K-folded ensemble model of either preset params or read_params
 model_1_params = {'lay': 2, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.2, 'opti': AdamW(weight_decay=0.0001)}  #0.016530431807041168
@@ -913,17 +978,15 @@ model_params = [model_1_params]
 row_weight_params_1 = {'lay': 4, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'}
 row_weight_params_2 = {'lay': 3, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.25, 'opti': 'adam'}
 row_weight_params_3 = {'lay': 4, 'acti_hid': 'elu', 'neur': 128, 'drop': 0.15, 'opti': 'adam'}
-row_weight_params = [row_weight_params_1,row_weight_params_2,row_weight_params_3]
+row_weight_params = [row_weight_params_1,row_weight_params_2,row_weight_params_3]"""
 
 modelbuilder.create_model_ensemble(n_folds=N_FOLDS, n_ensemble_models=n_ensemble_models,
-                                   min_target_amount=50, model_params=model_params, 
-                                   row_weight_params=row_weight_params, use_upsampling=use_upsampling)
+                                    model_params=model_params, row_weight_params=row_weight_params)
 
 modelbuilder.compute_best_matrix()
 modelbuilder.best_matrix_to_csv(submit_id_col=pre.X_id_submit, y_cols=pre.y_cols)
 
 pickle.dump(modelbuilder.best_mat, open(output_folder + "best_matrix.pickle", 'wb'))
-modelbuilder.plot_targets_to_zero(bottom_n_cols=50)
 
 bce_before = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=modelbuilder.average_pred)
 bce_after = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=modelbuilder.best_mat)
@@ -931,5 +994,3 @@ print("Binary crossentropy average across models before row weights: ", bce_befo
 print("Binary crossentropy average across models after row weights: ", bce_after)
 #%%
 modelbuilder.plot_targets_to_zero(bottom_n_cols=50)
-
-#%%
