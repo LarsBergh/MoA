@@ -341,14 +341,11 @@ class ModelBuilder():
     def select_random_parameters(self, n_param_sets):
         
         #Defines the allowed search space
-        layers = [2,3,4,5]
+        layers = [2,3,4, 5]
         acti_hid = ["elu", "relu", "sigmoid", "softplus", "softsign"] 
-        #dropout = [0.15, 0.20, 0.25, 0.3, 0.35, 0.4]
-        dropout = [0.15, 0.20, 0.25]
-        #neurons = [64, 96, 128, 160, 192, 224]
-        neurons = [64, 96, 128, 160]
-        #optimizers = ["nadam", "adam", SGD(lr=0.05, momentum=0.98), AdamW(weight_decay=0.0001), "rmsprop"]
-        optimizers = ["nadam", "adam", AdamW(weight_decay=0.0001)]
+        dropout = [0.15, 0.20, 0.25, 0.3, 0.35, 0.4]
+        neurons = [64, 96, 128, 160, 192, 224]
+        optimizers = ["nadam", "adam", SGD(lr=0.05, momentum=0.98), AdamW(weight_decay=0.0001), "rmsprop"]
 
         #Create dictionary of the given parameters
         param_dic = {"lay": layers, "acti_hid": acti_hid, "neur": neurons, 
@@ -401,10 +398,10 @@ class ModelBuilder():
 
             if params not in [row[0] for row in model_list]:
                 if weight_or_matrix == "matrix":
-                    loss = self.k_fold_model(n_folds=n_folds, model_params=params)
+                    loss, average_pred = self.k_fold_model(n_folds=n_folds, model_params=params)
 
                 elif weight_or_matrix == "weight":
-                    loss = self.k_fold_weights(n_folds=n_folds, row_weight_params=params)
+                    loss, average_weight = self.k_fold_weights(n_folds=n_folds, row_weight_params=params)
                     
                 model_list.append([params, loss])
 
@@ -588,7 +585,7 @@ class ModelBuilder():
             self.average_pred += np.array(model.predict(X_test)/n_folds)
             self.average_pred_submit += np.array(model.predict(X_submit)/n_folds)
             self.history = hist
-        return av_loss
+        return av_loss, self.average_pred
     #------------------------ Calculating row weights ------------------------#
     def k_fold_weights(self, n_folds, row_weight_params):
         """Predicts row weights for the prediction matrices by training a model that minimizes the absolute error of the amount of targets per row in X_train"""
@@ -621,7 +618,7 @@ class ModelBuilder():
             av_loss += test_loss/n_folds
             self.y_pred_weights += model.predict(X_test).clip(min=0)/n_folds
             self.y_submit_weights += model.predict(self.X_submit).clip(min=0)/n_folds
-        return av_loss
+        return av_loss, self.y_pred_weights
 
     def create_model_ensemble(self, n_ensemble_models, n_folds, model_params=None, row_weight_params=None):
         """Creates an ensemble model by applying K-fold cross validation to a given list of parameters"""
@@ -764,13 +761,15 @@ plot_graps = False #Set to true if plots should be created
 
 N_FOLDS = 2 #Determines how many folds are used for K-fold
 
-create_random_param_models = True #Create extra softmax target probability prediction models and save them to pickle object 
-create_random_row_models = True
-N_RAND_MODELS = 2 #Number of extra models to add to pickle object.
+create_random_param_models = False #Create extra softmax target probability prediction models and save them to pickle object 
+create_random_row_models = False
+N_RAND_MODELS = 1 #Number of extra models to add to pickle object.
 
 use_preset_params = True #Uses pre-defined perameters in the code
-n_ensemble_models = 2 #Define how many out of the best models should be used in ensemble
-n_ensemble_w = 2 #Defines how many of the top row weight array should be used in ensemble
+n_ensemble_models = 5 #Define how many out of the best models should be used in ensemble
+n_ensemble_w = 5 #Defines how many of the top row weight array should be used in ensemble
+
+save_best_models == True
 
 #Encoding type --> "map"
 ENC_TYPE = "map"
@@ -945,41 +944,99 @@ if create_random_row_models == True:
 
 #%%
 model_list = pickle.load(open(output_folder + "random_models.pickle", 'rb'))
-print("Random model list model amount: ", len(model_list), " models: ", model_list)
+#print("Random model list model amount: ", len(model_list), " models: ", model_list)
 
 weight_list = pickle.load(open(output_folder + "random_weights.pickle", 'rb'))
-print("Random weights list model amount: ", len(weight_list), " models: ", weight_list)
+#print("Random weights list model amount: ", len(weight_list), " models: ", weight_list)
+
+for params in model_list[:n_ensemble_models]:
+    print(params[0], params[1])
+for params in weight_list[:n_ensemble_w]:
+    print(params[0], params[1])
 #%%
-print(model_list[:n_ensemble_models+1])
-print(weight_list[:n_ensemble_w+1])
+if save_best_models == True:
+    #Model param performance
+    #0.01681339740753174
+    #0.01684808637946844
+    #0.016857131384313107
+    #0.016873540356755257
+    #0.016939623281359673
 
-model_1_params = {'lay': 3, 'acti_hid': 'relu', 'neur': 128, 'drop': 0.2, 'opti': AdamW(weight_decay=0.0001)}# 0.016857131384313107] 
-model_2_params = {'lay': 2, 'acti_hid': 'softplus', 'neur': 64, 'drop': 0.3, 'opti': 'adam'}# 0.016873540356755257
-model_params = [model_1_params]
+    #Define parameters for prediction matrices
+    model_params =[{'lay': 2, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.25, 'opti': AdamW(weight_decay=0.0001)}, 
+                    {'lay': 2, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.2, 'opti': AdamW(weight_decay=0.0001)}, 
+                    {'lay': 3, 'acti_hid': 'relu', 'neur': 128, 'drop': 0.2, 'opti': AdamW(weight_decay=0.0001)},
+                    {'lay': 2, 'acti_hid': 'softplus', 'neur': 64, 'drop': 0.3, 'opti': 'adam'},
+                    {'lay': 2, 'acti_hid': 'sigmoid', 'neur': 160, 'drop': 0.15, 'opti': AdamW(weight_decay=0.0001)}] 
 
-row_weight_params_1 = {'lay': 2, 'acti_hid': 'sigmoid', 'neur': 192, 'drop': 0.3, 'opti': 'nadam'} #0.39536307752132416
-row_weight_params_2 = {'lay': 4, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.3, 'opti': AdamW(weight_decay=0.0001)} #0.40555816888809204
-row_weight_params = [row_weight_params_1, row_weight_params_2]
+    #Create K-fold prediction matrix for each model
+    pred_list = []
 
+    for model in model_params:
+        loss, average_pred = modelbuilder.k_fold_model(n_folds=N_FOLDS, model_params=model)
+        pred_list.append(average_pred)
+
+    #Dump prediction matrices to pickle
+    pickle.dump(pred_list, open(output_folder + "pred_matrices.pickle", 'wb'))
+
+    #Model param performance
+    #0.39536307752132416
+    #0.3993239402770996
+    #0.39983491599559784
+    #0.40148259699344635
+    #0.40170036256313324
+
+    row_weight_params = [{'lay': 2, 'acti_hid': 'sigmoid', 'neur': 192, 'drop': 0.3, 'opti': 'nadam'}, 
+                        {'lay': 2, 'acti_hid': 'softsign', 'neur': 64, 'drop': 0.15, 'opti': 'adam'}, 
+                        {'lay': 2, 'acti_hid': 'sigmoid', 'neur': 96, 'drop': 0.15, 'opti': AdamW(weight_decay=0.0001)},
+                        {'lay': 2, 'acti_hid': 'sigmoid', 'neur': 96, 'drop': 0.2, 'opti': 'adam'}, 
+                        {'lay': 2, 'acti_hid': 'sigmoid', 'neur': 128, 'drop': 0.25, 'opti': AdamW(weight_decay=0.0001)}]
+
+    #Create K-fold prediction matrix for each model
+    pred_weight_list = []
+
+    for model in row_weight_params:
+        loss, average_weight = modelbuilder.k_fold_weights(n_folds=N_FOLDS, row_weight_params=model)
+        pred_weight_list.append(average_weight)
+
+    #Dump prediction matrices to pickle
+    pickle.dump(pred_weight_list, open(output_folder + "pred_weight.pickle", 'wb'))
 
 #%%
-"""#Get best 5 models for ensemble
-print(model_list[:5])
-#Create an K-folded ensemble model of either preset params or read_params
-model_1_params = {'lay': 2, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.2, 'opti': AdamW(weight_decay=0.0001)}  #0.016530431807041168
-model_2_params = {'lay': 2, 'acti_hid': 'elu', 'neur': 128, 'drop': 0.25, 'opti': AdamW(weight_decay=0.0001)} #0.01658029295504093
-model_3_params = {'lay': 2, 'acti_hid': 'sigmoid', 'neur': 96, 'drop': 0.25, 'opti': AdamW(weight_decay=0.0001)} #0.016617590561509132
-model_4_params = {'lay': 4, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.2, 'opti': 'adam'} #0.016619844362139702
-model_5_params = {'lay': 3, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'} #0.016632817685604095
+pred_weights = pickle.load(open(output_folder + "pred_weight.pickle", 'rb'))
+pred_matrices = pickle.load(open(output_folder + "pred_matrices.pickle", 'rb'))
 
-#[model_1_params, model_2_params, model_3_params, model_4_params, model_5_params]
-model_params = [model_1_params]
+#%%
 
-row_weight_params_1 = {'lay': 4, 'acti_hid': 'softplus', 'neur': 128, 'drop': 0.15, 'opti': 'nadam'}
-row_weight_params_2 = {'lay': 3, 'acti_hid': 'softsign', 'neur': 128, 'drop': 0.25, 'opti': 'adam'}
-row_weight_params_3 = {'lay': 4, 'acti_hid': 'elu', 'neur': 128, 'drop': 0.15, 'opti': 'adam'}
-row_weight_params = [row_weight_params_1,row_weight_params_2,row_weight_params_3]"""
+ensemble_list = []
+#Test all different combinations of weight averages and pred matrices
+for weight in range(0, len(pred_weights)):
+    av_matrix = sum(pred_matrices[:weight+1])/(weight+1)
 
+    for matrix in range(0, len(pred_matrices)):
+        av_weights = sum(pred_weights[:matrix+1])/(matrix+1)
+        current_ensemble = av_matrix * av_weights
+
+        bce_ensemble = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=current_ensemble)
+        ensemble_list.append([weight + 1, matrix + 1, bce_ensemble])
+        print("BCE of matrices: ", weight+1, " and weights ", matrix+1, " is ", bce_ensemble)
+
+ensemble_list.sort(key=lambda x:x[2])
+print(ensemble_list)
+#%%
+av_matrix = None
+#Test all different combinations of weight averages and pred matrices
+for matrix in range(0, len(pred_matrices)):
+    av_matrix = sum(pred_matrices[:matrix+1])/(matrix+1)
+    bce_ensemble = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=av_matrix)
+    print("BCE of matrices: ", matrix+1, " is ", bce_ensemble)
+
+for weight in range(0, len(pred_weights)):
+    av_weight = sum(pred_weights[:weight+1])/(weight+1)
+    bce_ensemble = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=av_matrix*av_weight)
+    print("BCE of weight: ", weight+1, " is ", bce_ensemble)
+        
+#%%
 modelbuilder.create_model_ensemble(n_folds=N_FOLDS, n_ensemble_models=n_ensemble_models,
                                     model_params=model_params, row_weight_params=row_weight_params)
 
