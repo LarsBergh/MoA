@@ -332,7 +332,9 @@ class ModelBuilder():
         self.X_submit = X_submit
         self.random_state = random_state
         self.is_kaggle = is_kaggle
-
+        
+        X, X_test, y, y_test = train_test_split(self.X, self.y, test_size=0.2, random_state=self.random_state)
+        self.y_test = y_test
         np.random.seed(random_state)
         tf.random.set_seed(random_state)
         sess = tf.compat.v1.Session(graph=tf.compat.v1.get_default_graph())
@@ -667,40 +669,45 @@ class ModelBuilder():
 
 #%%
 #------------------------ Model settings ------------------------#
-print_versions = False
-
+print_versions = False #Print versions of packages that were used
 is_kaggle = False #Set to true if making upload to kaggle
 
 test_scalers = False #Set to true to ONLY compute baseline model with various scalers.
-
 test_pca = False #Sets various PCA component settings and their corresponding loss
-
 test_upsampling = False #Compares an upsampled dataframe to non-upsampled dataframe on baseline model with k-fold
 
 plot_graps = False #Set to true if plots should be created
-
 N_FOLDS = 2 #Determines how many folds are used for K-fold
 
 create_random_param_models = False #Create extra softmax target probability prediction models and save them to pickle object 
 create_random_row_models = False
 N_RAND_MODELS = 1 #Number of extra models to add to pickle object for both neural nets.
 
-save_best_models == False #Saves the best models from all randomly created objects (hardcoded)
+save_best_models = False #Saves the best models from all randomly created objects (hardcoded)
 
-#Encoding type --> "map"
-ENC_TYPE = "map"
-
-#Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
-SC_TYPE = "quantile_normal"
-
-#Set random seed
-RANDOM_STATE = 0
+ENC_TYPE = "map" #Encoding type --> "map"
+SC_TYPE = "quantile_normal" #Scaling type --> "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"
+RANDOM_STATE = 0 #Set random seed
 
 print("Printing model settings....")
+print("Print versions: ", print_versions)
+
+print("Test scalers: ", test_scalers)
+print("Test PCA: ", test_pca)
+print("Test upsampling: ", test_upsampling)
+
 print("Plot graphs: ", plot_graps)
+print("N-folds for k-fold: ", N_FOLDS)
+
+print("Create prediction matrix models (random params): ", create_random_param_models)
+print("Create prediction row weight models (random params): ", create_random_row_models)
+print("Number of random models to create if true", N_RAND_MODELS)
+print("Creating and saving best models from random search: ", save_best_models)
+
 print("Encoding type: ", ENC_TYPE)
 print("Scaling type: ", SC_TYPE)
-
+print("Random state: ", RANDOM_STATE)
+#%%
 #------------------------ Package versions ------------------------#
 #Print versions for "Language and Package section of report"
 if print_versions == True:
@@ -725,26 +732,31 @@ else:
 #------------------------ Test various scalers ------------------------#
 if test_scalers == True:
     scaling_results = []
+
+    #Loop over all scaler types
     for scale_type in ["None", "standardize", "normalize", "quantile_normal", "quantile_uniform", "power", "robust"]:
-        #------------------------ Load data ------------------------#
+        
+        #Load data
         X = pd.read_csv(data_folder + "train_features.csv")
         y = pd.read_csv(data_folder + "train_targets_scored.csv")
         X_submit = pd.read_csv(data_folder + "test_features.csv")
 
-        #------------------------ Init preprocessor ------------------------#
+        #Init preprocessor and drop Id column
         pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
         pre.drop_id()
 
-        #------------------------ Encode and scale X data ------------------------#
+        #Encode and scale X data
         pre.encode_df(encoder_type=ENC_TYPE)
         pre.scale_df(scaler_type=scale_type)
 
-        #------------------------ Build models ------------------------#
+        #Init model builder
         modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
                             random_state=RANDOM_STATE, is_kaggle=is_kaggle)
 
+        #Create baseline with each dataframe scaling type
         scaling_results.append([scale_type, modelbuilder.create_baseline(random_state=RANDOM_STATE, n_folds=N_FOLDS)])
 
+    #Sort scaled results from low to high binary cross-entropy
     scaling_results.sort(key=lambda x:x[1])
     print(scaling_results)
     sys.exit()
@@ -756,27 +768,31 @@ if test_scalers == True:
 #['robust', 0.018999390304088593]
 #['normalize', 0.019516831263899803]]
 #%%
-#------------------------ Test upsampling ------------------------#
+#Tests upsampling all targets with less than 6 instances up to 100
 if test_upsampling == True:
     upsampling_results = []
+
+    #Compares upsampling to doing nothing
     for upsampling in [None, True]:
-        #------------------------ Load data ------------------------#
+        
+        #Loads data
         X = pd.read_csv(data_folder + "train_features.csv")
         y = pd.read_csv(data_folder + "train_targets_scored.csv")
         X_submit = pd.read_csv(data_folder + "test_features.csv")
 
-        #------------------------ Init preprocessor ------------------------#
+        #Inits preprocessor and drops Id column
         pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
         pre.drop_id()
 
-        #------------------------ Encode and scale X data ------------------------#
+        #Encode and scale X data
         pre.encode_df(encoder_type="map")
         pre.scale_df(scaler_type="None")
 
-        #------------------------ Build models ------------------------#
+        #Init modelbuilder
         modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
                             random_state=RANDOM_STATE, is_kaggle=is_kaggle)
 
+        #Creates baseline with or without upsampled data
         upsampling_results.append([upsampling, modelbuilder.create_baseline(random_state=RANDOM_STATE, n_folds=N_FOLDS, use_upsampling=upsampling)])
 
     upsampling_results.sort(key=lambda x:x[1])
@@ -785,32 +801,41 @@ if test_upsampling == True:
 #[None, 0.01817983016371727] 
 #[True, 0.023640152998268604]
 #%%
-#------------------------ Test various PCA settings ------------------------#
+#Tests binary cross-entropy with various column sets
 if test_pca == True:
     pca_results = []
+
+    #Lists how many cell viability and gene expression columns will be used in test
     cell_components = [5, 10, 15, 35, 50, 100] 
     gene_components = [25, 50, 75, 150, 200, 772]
 
+    #For each set of columns perform test
     for i in range(len(cell_components)):
-        #------------------------ Load data ------------------------#
+        
+        #Loads data
         X = pd.read_csv(data_folder + "train_features.csv")
         y = pd.read_csv(data_folder + "train_targets_scored.csv")
         X_submit = pd.read_csv(data_folder + "test_features.csv")
 
-        #------------------------ Init preprocessor ------------------------#
+        #Inits preprocessor and drops Id column
         pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
         pre.drop_id()
+
+        #Does PCA for given cell and gene columns
         pre.pca(c_req=cell_components[i], g_req=gene_components[i])
 
-        #------------------------ Encode and scale X data ------------------------#
+        #Encodes few categorical/numercial columns
         pre.encode_df(encoder_type="map")
         
-        #------------------------ Build models ------------------------#
+        #Inits modelbuilder
         modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
                             random_state=RANDOM_STATE, is_kaggle=is_kaggle)
-    
+
+        #Creates baseline model with each PCA component set
         test_loss = modelbuilder.create_baseline(random_state=RANDOM_STATE, n_folds=N_FOLDS)
         pca_results.append([cell_components[i], gene_components[i], test_loss])
+
+    #Returns dataframe with pca cell, gene column counts and test loss
     pca_results = pd.DataFrame(data=pca_results, columns=["cell_cols", "gene_cols", "test loss"])
 
     print(pca_results)
@@ -829,11 +854,11 @@ X = pd.read_csv(data_folder + "train_features.csv")
 y = pd.read_csv(data_folder + "train_targets_scored.csv")
 X_submit = pd.read_csv(data_folder + "test_features.csv")
 
-#------------------------ Init preprocessor ------------------------#
+#Init preprocessor and drop Id columns
 pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
 pre.drop_id()
 
-#------------------------ Plot graphs ------------------------#
+#Init plot object and plot histrograms, skew, kurtosis, target frequencies and row target count plots
 if plot_graps == True:
     plotter = Plotter(X=pre.X, y=pre.y, plot_path="figs/")
 
@@ -853,43 +878,42 @@ if plot_graps == True:
     #Combine the various skew and kurtosis images into 1
     plotter.combine_graphs()
 
-#------------------------ Encode and scale X data ------------------------#
+#Use mapping and scaling to preprocess data
 pre.encode_df(encoder_type=ENC_TYPE)
 pre.scale_df(scaler_type=SC_TYPE)
 
-#------------------------ Build models ------------------------#
+#Init model builder
 modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
                             random_state=RANDOM_STATE, is_kaggle=is_kaggle)
 
-#%%
+#Create random search generated models through model builder (output: prediction matrix)
 if create_random_param_models == True:
     modelbuilder.create_more_random_models(n_folds=N_FOLDS, n_rand_models=N_RAND_MODELS, random_state=RANDOM_STATE, output_folder=output_folder, weight_or_matrix="matrix")
 
+#Create random search generated models through model builder (output: row weight vector)
 if create_random_row_models == True:
     modelbuilder.create_more_random_models(n_folds=N_FOLDS, n_rand_models=N_RAND_MODELS, random_state=RANDOM_STATE, output_folder=output_folder, weight_or_matrix="weight")
 
 
 #%%
+#Loads model parameters and test-loss for prediction matrices
 model_list = pickle.load(open(output_folder + "random_models.pickle", 'rb'))
-#print("Random model list model amount: ", len(model_list), " models: ", model_list)
+print("Random model list model amount: ", len(model_list), " models: ", model_list)
 
+#Loads model parameters and test-loss for row weight vectors
 weight_list = pickle.load(open(output_folder + "random_weights.pickle", 'rb'))
-#print("Random weights list model amount: ", len(weight_list), " models: ", weight_list)
+print("Random weights list model amount: ", len(weight_list), " models: ", weight_list)
 
+#Prints all parameter sets in weight and matrix objects (from random model creation)
 for params in model_list:
     print(params[0], params[1])
 for params in weight_list:
     print(params[0], params[1])
 #%%
 if save_best_models == True:
-    #Model param performance
-    #0.01681339740753174
-    #0.01684808637946844
-    #0.016857131384313107
-    #0.016873540356755257
-    #0.016939623281359673
-
-    #Define parameters for prediction matrices
+    #Hardcode the top 5 best parameters sets that were found for prediction matrix modeling
+    #Model param performance (Binary cross-entropy for prediction matrix versus y_test)
+    #1: 0.0168133,  2: 0.0168480    3: 0.0168571    4: 0.0168735    5: 0.0169396
     model_params =[{'lay': 2, 'acti_hid': 'elu', 'neur': 96, 'drop': 0.25, 'opti': AdamW(weight_decay=0.0001)}, 
                     {'lay': 2, 'acti_hid': 'elu', 'neur': 64, 'drop': 0.2, 'opti': AdamW(weight_decay=0.0001)}, 
                     {'lay': 3, 'acti_hid': 'relu', 'neur': 128, 'drop': 0.2, 'opti': AdamW(weight_decay=0.0001)},
@@ -906,13 +930,9 @@ if save_best_models == True:
     #Dump prediction matrices to pickle
     pickle.dump(pred_list, open(output_folder + "pred_matrices.pickle", 'wb'))
 
-    #Model param performance
-    #0.39536307752132416
-    #0.3993239402770996
-    #0.39983491599559784
-    #0.40148259699344635
-    #0.40170036256313324
-
+    #Hardcode the top 5 best parameters sets that were found for row weight vector modeling 
+    #Model param performance (Mean absolute error of amount of targets predicted versus y_actual targets)
+    #1: 0.3953630,   2: 0.3993239,  3: 0.3998349,   4: 0.4014825,   5: 0.4017003   
     row_weight_params = [{'lay': 2, 'acti_hid': 'sigmoid', 'neur': 192, 'drop': 0.3, 'opti': 'nadam'}, 
                         {'lay': 2, 'acti_hid': 'softsign', 'neur': 64, 'drop': 0.15, 'opti': 'adam'}, 
                         {'lay': 2, 'acti_hid': 'sigmoid', 'neur': 96, 'drop': 0.15, 'opti': AdamW(weight_decay=0.0001)},
@@ -922,53 +942,52 @@ if save_best_models == True:
     #Create K-fold prediction matrix for each model
     pred_weight_list = []
 
+    #Run k_fold to return weight vectors
     for model in row_weight_params:
         loss, average_weight = modelbuilder.k_fold_weights(n_folds=N_FOLDS, row_weight_params=model)
         pred_weight_list.append(average_weight)
 
-    #Dump prediction matrices to pickle
+    #Dump prediction row vector weights to pickle
     pickle.dump(pred_weight_list, open(output_folder + "pred_weight.pickle", 'wb'))
 
 #%%
+#Loads the pickled prediction matrices and row weight vectors for 5 best models
 pred_weights = pickle.load(open(output_folder + "pred_weight.pickle", 'rb'))
 pred_matrices = pickle.load(open(output_folder + "pred_matrices.pickle", 'rb'))
 
-#%%
-
 ensemble_list = []
-#Test all different combinations of weight averages and pred matrices
-for weight in range(0, len(pred_weights)):
-    av_matrix = sum(pred_matrices[:weight+1])/(weight+1)
+print("Binary cross-entropy of amount of matrices in ensemble * amount weight vectors in ensemble")
 
-    for matrix in range(0, len(pred_matrices)):
-        av_weights = sum(pred_weights[:matrix+1])/(matrix+1)
+#Loops over all prediction matrices
+for matrix in range(1, len(pred_matrices)+1):\
+
+    #Average 1 to 5 prediction matrices, moving from best to worst
+    av_matrix = sum(pred_matrices[:matrix])/(matrix)
+
+    #Loops over all row weight vectors
+    for weight in range(1, len(pred_weights) + 1):
+
+        #Average 1 to 5 weight vectors, moving from best to worst
+        av_weights = sum(pred_weights[:weight])/(weight)
+
+        #Computes the ensemble that can be made with X average prediction matrices and Y average row vectors
         current_ensemble = av_matrix * av_weights
 
+        #Compute and log binary cross-entropy for each combination of ensembles
         bce_ensemble = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=current_ensemble)
-        ensemble_list.append([weight + 1, matrix + 1, bce_ensemble])
-        print("BCE of matrices: ", matrix+1, " and weights ", weight+1, " is ", bce_ensemble)
+        ensemble_list.append([weight, matrix, bce_ensemble])
+        print("matrix: ", matrix, "weight vector: ", weight, " is ", bce_ensemble)
 
+#Sort ensemble results with lowest binary cross-entropy first
 ensemble_list.sort(key=lambda x:x[2])
-print("Best ensemble has ", ensemble_list[0][0], " matrices ", ensemble_list[0][1], " weights and BCE of", ensemble_list[0][2])
-#%%
-av_matrix = None
-#Test all different combinations of weight averages and pred matrices
-for matrix in range(0, len(pred_matrices)):
-    av_matrix = sum(pred_matrices[:matrix+1])/(matrix+1)
-    bce_ensemble = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=av_matrix)
-    print("BCE of matrices: ", matrix+1, " is ", bce_ensemble)
 
-for weight in range(0, len(pred_weights)):
-    av_weight = sum(pred_weights[:weight+1])/(weight+1)
-    bce_ensemble = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=av_matrix*av_weight)
-    print("BCE of weight: ", weight+1, " is ", bce_ensemble)
-
-
+#Print the best, worst and delta between best and worst ensemble
+print("Best ensemble has ", ensemble_list[0][0], " matrices ", ensemble_list[0][1], " weights and Binary cross-entropy of", ensemble_list[0][2])
+print("Worst ensemble has ", ensemble_list[-1][0], " matrices ", ensemble_list[-1][1], " weights and Binary cross-entropy of", ensemble_list[-1][2])
+print("Gain due to ensemble model: ", ensemble_list[-1][2] - ensemble_list[0][2])
 #%%
 modelbuilder.plot_targets_to_zero(bottom_n_cols=50)
 #%%
 #modelbuilder.best_matrix_to_csv(submit_id_col=pre.X_id_submit, y_cols=pre.y_cols)
-
-pickle.dump(modelbuilder.best_mat, open(output_folder + "best_matrix.pickle", 'wb'))
 
 #%%
