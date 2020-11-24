@@ -746,7 +746,7 @@ if test_scalers == True:
         pre.drop_id()
 
         #Encode and scale X data
-        pre.encode_df(encoder_type=ENC_TYPE)
+        pre.encode_df(encoder_type="map")
         pre.scale_df(scaler_type=scale_type)
 
         #Init model builder
@@ -767,6 +767,55 @@ if test_scalers == True:
 #['quantile_normal', 0.018644552677869797]
 #['robust', 0.018999390304088593]
 #['normalize', 0.019516831263899803]]
+#%%
+#Tests binary cross-entropy with various column sets
+if test_pca == True:
+    pca_results = []
+
+    #Lists how many cell viability and gene expression columns will be used in test
+    cell_components = [5, 10, 15, 35, 50, 100] 
+    gene_components = [25, 50, 75, 150, 200, 772]
+
+    #For each set of columns perform test
+    for i in range(len(cell_components)):
+        
+        #Loads data
+        X = pd.read_csv(data_folder + "train_features.csv")
+        y = pd.read_csv(data_folder + "train_targets_scored.csv")
+        X_submit = pd.read_csv(data_folder + "test_features.csv")
+
+        #Inits preprocessor and drops Id column
+        pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
+        pre.drop_id()
+
+        #Does PCA for given cell and gene columns
+        pre.pca(c_req=cell_components[i], g_req=gene_components[i])
+
+        #Encodes few categorical/numercial columns and scales dataframe
+        pre.encode_df(encoder_type="map")
+        pre.scale_df(scaler_type="None")
+        
+        #Inits modelbuilder
+        modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
+                            random_state=RANDOM_STATE, is_kaggle=is_kaggle)
+
+        #Creates baseline model with each PCA component set
+        test_loss = modelbuilder.create_baseline(random_state=RANDOM_STATE, n_folds=N_FOLDS)
+        pca_results.append([cell_components[i], gene_components[i], test_loss])
+
+    #Returns dataframe with pca cell, gene column counts and test loss
+    pca_results = pd.DataFrame(data=pca_results, columns=["cell_cols", "gene_cols", "test loss"])
+
+    print(pca_results)
+    sys.exit()
+
+#cell_cols  gene_cols  test loss
+#5          25         0.017841
+#10         50         0.017775
+#15         75         0.017724
+#35         150        0.017826
+#50         200        0.017889
+#100        772        0.017695
 #%%
 #Tests upsampling all targets with less than 6 instances up to 100
 if test_upsampling == True:
@@ -800,54 +849,6 @@ if test_upsampling == True:
     sys.exit()
 #[None, 0.01817983016371727] 
 #[True, 0.023640152998268604]
-#%%
-#Tests binary cross-entropy with various column sets
-if test_pca == True:
-    pca_results = []
-
-    #Lists how many cell viability and gene expression columns will be used in test
-    cell_components = [5, 10, 15, 35, 50, 100] 
-    gene_components = [25, 50, 75, 150, 200, 772]
-
-    #For each set of columns perform test
-    for i in range(len(cell_components)):
-        
-        #Loads data
-        X = pd.read_csv(data_folder + "train_features.csv")
-        y = pd.read_csv(data_folder + "train_targets_scored.csv")
-        X_submit = pd.read_csv(data_folder + "test_features.csv")
-
-        #Inits preprocessor and drops Id column
-        pre = Preprocessor(X=X, X_submit=X_submit, y=y, encode_cols=["cp_type", "cp_time", "cp_dose"])
-        pre.drop_id()
-
-        #Does PCA for given cell and gene columns
-        pre.pca(c_req=cell_components[i], g_req=gene_components[i])
-
-        #Encodes few categorical/numercial columns
-        pre.encode_df(encoder_type="map")
-        
-        #Inits modelbuilder
-        modelbuilder = ModelBuilder(X=pre.X, y=pre.y, X_submit=pre.X_submit, 
-                            random_state=RANDOM_STATE, is_kaggle=is_kaggle)
-
-        #Creates baseline model with each PCA component set
-        test_loss = modelbuilder.create_baseline(random_state=RANDOM_STATE, n_folds=N_FOLDS)
-        pca_results.append([cell_components[i], gene_components[i], test_loss])
-
-    #Returns dataframe with pca cell, gene column counts and test loss
-    pca_results = pd.DataFrame(data=pca_results, columns=["cell_cols", "gene_cols", "test loss"])
-
-    print(pca_results)
-    sys.exit()
-
-#cell_cols  gene_cols  test loss
-#5          25         0.017841
-#10         50         0.017775
-#15         75         0.017724
-#35         150        0.017826
-#50         200        0.017889
-#100        772        0.017695
 #%%
 #------------------------ Main Code ------------------------#
 X = pd.read_csv(data_folder + "train_features.csv")
@@ -957,13 +958,19 @@ pred_matrices = pickle.load(open(output_folder + "pred_matrices.pickle", 'rb'))
 
 ensemble_list = []
 print("Binary cross-entropy of amount of matrices in ensemble * amount weight vectors in ensemble")
-
+#%%
 #Loops over all prediction matrices
-for matrix in range(1, len(pred_matrices)+1):\
+#BCE of baseline model with no scaling
+#BCE of best matrix 0.01624726504087448
+#BCE of best ensemble matrix 0.01606087014079094
+#BCE of best enseble matrix with best ensemble weigth 0.015337980352342129
+for matrix in range(1, len(pred_matrices)+1):
 
     #Average 1 to 5 prediction matrices, moving from best to worst
     av_matrix = sum(pred_matrices[:matrix])/(matrix)
 
+    bce_without_weight = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=av_matrix)
+    print("Binary crossentropy for just the matrix", matrix, " is ", bce_without_weight)
     #Loops over all row weight vectors
     for weight in range(1, len(pred_weights) + 1):
 
