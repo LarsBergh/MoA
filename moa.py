@@ -994,7 +994,14 @@ print("Worst ensemble has ", ensemble_list[-1][0], " matrices ", ensemble_list[-
 print("Gain due to ensemble model: ", ensemble_list[-1][2] - ensemble_list[0][2])
 #%%
 modelbuilder.plot_targets_to_zero(bottom_n_cols=50)
+
+#Save the type of drug target across the columns
+drug_target_counts = []
+for col in y.columns:
+    drug_target_counts.append([col.split("_")[-1]])
+
+#Print a table of drug target types and their column counts
+print(205-pd.DataFrame(lis).value_counts()[:4])
+print("Other", 205-pd.DataFrame(lis).value_counts()[:4].sum())
 #%%
 #modelbuilder.best_matrix_to_csv(submit_id_col=pre.X_id_submit, y_cols=pre.y_cols)
-
-#%%
