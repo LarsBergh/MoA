@@ -955,15 +955,15 @@ if save_best_models == True:
 #Loads the pickled prediction matrices and row weight vectors for 5 best models
 pred_weights = pickle.load(open(output_folder + "pred_weight.pickle", 'rb'))
 pred_matrices = pickle.load(open(output_folder + "pred_matrices.pickle", 'rb'))
-
 ensemble_list = []
 print("Binary cross-entropy of amount of matrices in ensemble * amount weight vectors in ensemble")
-#%%
+
 #Loops over all prediction matrices
 #BCE of baseline model with no scaling
 #BCE of best matrix 0.01624726504087448
 #BCE of best ensemble matrix 0.01606087014079094
 #BCE of best enseble matrix with best ensemble weigth 0.015337980352342129
+
 for matrix in range(1, len(pred_matrices)+1):
 
     #Average 1 to 5 prediction matrices, moving from best to worst
@@ -977,31 +977,47 @@ for matrix in range(1, len(pred_matrices)+1):
         #Average 1 to 5 weight vectors, moving from best to worst
         av_weights = sum(pred_weights[:weight])/(weight)
 
+        #Create perfect weight array based on actual y_test
+        perfect_weights = np.array(modelbuilder.y_test.sum(axis=1)).reshape(-1,1)
+
         #Computes the ensemble that can be made with X average prediction matrices and Y average row vectors
         current_ensemble = av_matrix * av_weights
-
+        perfect_weight_ensemble = av_matrix * perfect_weights
+        
         #Compute and log binary cross-entropy for each combination of ensembles
+        bce_perfect_row = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=perfect_weight_ensemble)
         bce_ensemble = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=current_ensemble)
-        ensemble_list.append([weight, matrix, bce_ensemble])
-        print("matrix: ", matrix, "weight vector: ", weight, " is ", bce_ensemble)
+        ensemble_list.append([weight, matrix, bce_ensemble, bce_perfect_row])
+        print("matrix: ", matrix, "weight vector: ", weight, " is ", bce_ensemble, " and perfect weight BCE is ", bce_perfect_row)
 
 #Sort ensemble results with lowest binary cross-entropy first
 ensemble_list.sort(key=lambda x:x[2])
 
+#%%
+print(ensemble_list[0])
+#%%
+row_weight_bce_improve = 100-((ensemble_list[0][3]/ensemble_list[0][2])*100)
+prob_matrix_bce_improve = 100-row_weight_bce_improve
+print(row_weight_bce_improve)
+print(prob_matrix_bce_improve)
+#%%
 #Print the best, worst and delta between best and worst ensemble
 print("Best ensemble has ", ensemble_list[0][0], " matrices ", ensemble_list[0][1], " weights and Binary cross-entropy of", ensemble_list[0][2])
+print("Perfect row weight would yield ", ensemble_list[0][3], " Which represents ", row_weight_bce_improve , 
+"% of possible improvement while probablity prediction improvements could yield ", prob_matrix_bce_improve, "%")
+
 print("Worst ensemble has ", ensemble_list[-1][0], " matrices ", ensemble_list[-1][1], " weights and Binary cross-entropy of", ensemble_list[-1][2])
 print("Gain due to ensemble model: ", ensemble_list[-1][2] - ensemble_list[0][2])
 #%%
-modelbuilder.plot_targets_to_zero(bottom_n_cols=50)
+#modelbuilder.plot_targets_to_zero(bottom_n_cols=50)
 
 #Save the type of drug target across the columns
 drug_target_counts = []
 for col in y.columns:
     drug_target_counts.append([col.split("_")[-1]])
-
+#%%
 #Print a table of drug target types and their column counts
-print(205-pd.DataFrame(lis).value_counts()[:4])
-print("Other", 205-pd.DataFrame(lis).value_counts()[:4].sum())
+print(pd.DataFrame(drug_target_counts).value_counts()[:4])
+print("Other", 205-pd.DataFrame(drug_target_counts).value_counts()[:4].sum())
 #%%
 #modelbuilder.best_matrix_to_csv(submit_id_col=pre.X_id_submit, y_cols=pre.y_cols)
