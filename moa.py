@@ -29,9 +29,10 @@ from tensorflow.python.client import device_lib
 from tensorflow_addons.optimizers import AdamW
 
 from sklearn.model_selection import train_test_split, KFold
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, multilabel_confusion_matrix
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer, PowerTransformer, RobustScaler
-
+#%%
 #------------------------ Classes ------------------------#
 class Preprocessor:
     def __init__(self, X, X_submit, y, encode_cols):
@@ -159,17 +160,22 @@ class Plotter():
         #Count amount of targets per row and sum by target count
         label_per_row = self.y.sum(axis=1).value_counts().sort_index(axis=0)
         print(100-((303+55+13+6)/len(self.y)*100), " percent has 0,1 or 2 labels")
-        print("% 0, 1, 2 labels: ", label_per_row[0]/sum(label_per_row),label_per_row[1]/sum(label_per_row),label_per_row[2]/sum(label_per_row))
+        zero_label_percentage = label_per_row[0]/sum(label_per_row)
+        one_label_percentage = label_per_row[1]/sum(label_per_row)
+        rest_label_percentage = 1 - zero_label_percentage - one_label_percentage
+        print("% 0, 1, 2+ labels: ", zero_label_percentage, one_label_percentage, rest_label_percentage)
 
         #Plot sum of label counts across all rows 
         fig, axs = plt.subplots(1,1, figsize=(7,5))
         target_counts = pd.concat([pd.Series([x for x in range(8)]), label_per_row], axis=1, keys=["targets per drug", "amount of drugs"]).fillna(0)
         row_plot = sns.barplot(data= target_counts, x="targets per drug", y="amount of drugs")
-        row_plot.set_title('Amount of targets per drug admission')
-        
+        row_plot.set_title('Amount of targets per drug admission', fontsize=18)
+        axs.set_xlabel("Targets per drug", fontsize=14)
+        axs.set_ylabel("Amount of drugs", fontsize=14)
+
         #Add values of bar chart on top of bars
         for index, row in target_counts.iterrows():
-            row_plot.text(row.name,row["amount of drugs"] + 40, int(row["amount of drugs"]), color='black', ha="center")
+            row_plot.text(row.name,row["amount of drugs"] + 40, int(row["amount of drugs"]), color='black', ha="center", fontsize=14)
         
         #Adjust layout and save
         plt.tight_layout()
@@ -196,13 +202,16 @@ class Plotter():
         fig, axs = plt.subplots(1,1, figsize=(15,7))
 
         col_plot = sns.barplot(data=count_target_df_50, x="target name", y="target count")
-        col_plot.set_title('Top 50 targets count across all drug admissions')
-        col_plot.set_xticklabels(col_plot.get_xticklabels(),rotation=45,ha="right",rotation_mode='anchor', fontsize=8)
+        col_plot.set_title('Top 50 targets count across all drug admissions', fontsize=18)
+        col_plot.set_xticklabels(col_plot.get_xticklabels(), rotation=45, ha="right", rotation_mode='anchor', fontsize=12)
+        axs.set_xlabel("Target name", fontsize=14)
+        axs.set_ylabel("Target amount", fontsize=14)
+        plt.setp(axs.get_yticklabels(), fontsize=14)
         count = 0
-        
+
         #Add values of bar chart on top of bars
         for index, row in count_target_df_50.iterrows():
-            col_plot.text(count,row["target count"] + 6, int(row["target count"]), color='black', ha="center")
+            col_plot.text(count,row["target count"] + 6, int(row["target count"]), color='black', ha="center", fontsize=10)
             count += 1
 
         #Adjust layout and save
@@ -228,8 +237,12 @@ class Plotter():
                     axs[i, j].hist(x=self.X.loc[:, cols[count]], bins=50, color="#E1812B")
                 else:
                     axs[i, j].hist(x=self.X.loc[:, cols[count]], bins=50, color="#3174A1")
-
-                axs[i, j].set_title("Distribution " + cols[count])
+                
+                plt.setp(axs[i, j].get_xticklabels(), fontsize=14)
+                plt.setp(axs[i, j].get_yticklabels(), fontsize=14)
+                axs[i, j].set_xlabel(xlabel="Value", fontsize=14)
+                axs[i, j].set_ylabel(ylabel="Amount of rows", fontsize=14)
+                axs[i, j].set_title("Distribution of column " + cols[count], fontsize=18)
                 count += 1
 
         #Adjust format of plot and save
@@ -283,15 +296,20 @@ class Plotter():
                 
                 fig, axs = plt.subplots(1,2, figsize=(10,5))
                 axs[0].hist(x=df[s_k], bins=50, color=color)
-                axs[0].set_title(g_c + " " + s_k + " values")
-                axs[0].set_xlabel(s_k + " value")
-                axs[0].set_ylabel("Amount of " + g_c + " columns")
+                axs[0].set_title(g_c + " " + s_k + " values", fontsize=18)
+                axs[0].set_xlabel(s_k + " value", fontsize=14)
+                axs[0].set_ylabel("Amount of " + g_c + " columns", fontsize=14)
+                plt.setp(axs[0].get_xticklabels(), fontsize=14)
+                plt.setp(axs[0].get_yticklabels(), fontsize=14)
 
                 bar = df[s_k + " columns per group"].value_counts().reset_index()
                 bar_skew = sns.barplot(data=bar, x="index", y=s_k + " columns per group", ax=axs[1], color=color)
-                bar_skew.set_xticklabels(bar_skew.get_xticklabels(),rotation=15,ha="right",rotation_mode='anchor')
-                axs[1].set_title(g_c + " " + s_k + " values")
+                bar_skew.set_xticklabels(bar_skew.get_xticklabels(),rotation=15,ha="right",rotation_mode='anchor', fontsize=14)
+                axs[1].set_title(g_c + " " + s_k + " values", fontsize=18)
                 axs[1].set_xlabel('')
+                axs[1].set_ylabel(s_k + " columns per group", fontsize=14)
+                plt.setp(axs[1].get_xticklabels(), fontsize=14)
+                plt.setp(axs[1].get_yticklabels(), fontsize=14)
                 plt.tight_layout()
                 img_path = self.plot_path + g_c + "_" + s_k + ".jpg"
                 fig.savefig(img_path)
@@ -676,7 +694,7 @@ test_scalers = False #Set to true to ONLY compute baseline model with various sc
 test_pca = False #Sets various PCA component settings and their corresponding loss
 test_upsampling = False #Compares an upsampled dataframe to non-upsampled dataframe on baseline model with k-fold
 
-plot_graps = False #Set to true if plots should be created
+plot_graps = True #Set to true if plots should be created
 N_FOLDS = 2 #Determines how many folds are used for K-fold
 
 create_random_param_models = False #Create extra softmax target probability prediction models and save them to pickle object 
@@ -879,6 +897,7 @@ if plot_graps == True:
     #Combine the various skew and kurtosis images into 1
     plotter.combine_graphs()
 
+#%%
 #Use mapping and scaling to preprocess data
 pre.encode_df(encoder_type=ENC_TYPE)
 pre.scale_df(scaler_type=SC_TYPE)
@@ -970,7 +989,7 @@ for matrix in range(1, len(pred_matrices)+1):
     av_matrix = sum(pred_matrices[:matrix])/(matrix)
 
     bce_without_weight = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=av_matrix)
-    print("Binary crossentropy for just the matrix", matrix, " is ", bce_without_weight)
+    #print("Binary crossentropy for just the matrix", matrix, " is ", bce_without_weight)
     #Loops over all row weight vectors
     for weight in range(1, len(pred_weights) + 1):
 
@@ -987,14 +1006,63 @@ for matrix in range(1, len(pred_matrices)+1):
         #Compute and log binary cross-entropy for each combination of ensembles
         bce_perfect_row = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=perfect_weight_ensemble)
         bce_ensemble = modelbuilder.calc_bce(y_true=np.array(modelbuilder.y_test).astype(float), y_pred=current_ensemble)
-        ensemble_list.append([weight, matrix, bce_ensemble, bce_perfect_row])
-        print("matrix: ", matrix, "weight vector: ", weight, " is ", bce_ensemble, " and perfect weight BCE is ", bce_perfect_row)
+        ensemble_list.append([weight, matrix, bce_ensemble, bce_perfect_row, av_weights, av_matrix])
+        #print("matrix: ", matrix, "weight vector: ", weight, " is ", bce_ensemble, " and perfect weight BCE is ", bce_perfect_row)
+        print(matrix," & ",weight," & ",round(bce_ensemble,6), " & ",round(bce_perfect_row,6))
 
 #Sort ensemble results with lowest binary cross-entropy first
 ensemble_list.sort(key=lambda x:x[2])
+#%%
+print(modelbuilder.y_test.shape)
 
 #%%
-print(ensemble_list[0])
+#Round the best row weight vector
+best_row_weight_rounded = ensemble_list[0][4].round()
+
+#Define empty prediction matrix and predicted matrix
+e_matrix = np.zeros(modelbuilder.y_test.shape)
+best_pred_mat = np.array(modelbuilder.y_test)
+
+#Get row weight rounded amount of highest probablity indices per row
+print(ensemble_list[0][5])
+
+#Loops over all rows in best prediction matrix
+for i, amount_probs in enumerate(best_row_weight_rounded):
+    
+    #Loop over the amount of indices to grab from each row
+    for j in range(0, int(amount_probs[0]+1)):
+        
+        #Get argmax of row
+        arg_max = np.argmax(best_pred_mat[i])
+        #print("Index: ", i, "value: ", j, " with argmax: ", arg_max)
+        
+        #Set index found by argmax to 0
+        best_pred_mat[i][arg_max] = 0
+
+        #Set argmax indices to 1 in e_matrix
+        e_matrix[i][arg_max] = 1
+#%%
+#Define y_test 
+
+#Compute accuracy of y_test and predicted matrix
+print(np.array(modelbuilder.y_test)[0], e_matrix[0])
+#%%
+print(list(modelbuilder.y_test.columns))
+#%%
+multilabel_confusion_matrix(y_true=modelbuilder.y_test, y_pred=e_matrix, labels=[0,1]).shape
+#%%
+#print(accuracy_score(y_true=modelbuilder.y_test, y_pred=e_matrix))
+#print(precision_score(y_true=modelbuilder.y_test, y_pred=e_matrix, average=None) , recall_score(y_true=modelbuilder.y_test, y_pred=e_matrix, average=None))
+print(f1_score(y_true=modelbuilder.y_test, y_pred=e_matrix, average="macro")) 
+#%%
+
+#Set these indices to 1 in empty matrix
+
+
+#Compute row accuracy and overall accuracy between y_pred and y_true 
+
+
+
 #%%
 row_weight_bce_improve = 100-((ensemble_list[0][3]/ensemble_list[0][2])*100)
 prob_matrix_bce_improve = 100-row_weight_bce_improve
@@ -1020,4 +1088,8 @@ for col in y.columns:
 print(pd.DataFrame(drug_target_counts).value_counts()[:4])
 print("Other", 205-pd.DataFrame(drug_target_counts).value_counts()[:4].sum())
 #%%
+#Percentage of targets to be predicted.
+print(modelbuilder.y_test.sum().sum()/(modelbuilder.y_test.shape[0]*modelbuilder.y_test.shape[1])*100)
 #modelbuilder.best_matrix_to_csv(submit_id_col=pre.X_id_submit, y_cols=pre.y_cols)
+
+# %%
