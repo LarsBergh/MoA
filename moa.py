@@ -1012,10 +1012,7 @@ for matrix in range(1, len(pred_matrices)+1):
 
 #Sort ensemble results with lowest binary cross-entropy first
 ensemble_list.sort(key=lambda x:x[2])
-#%%
-print(modelbuilder.y_test.shape)
 
-#%%
 #Round the best row weight vector
 best_row_weight_rounded = ensemble_list[0][4].round()
 
@@ -1041,29 +1038,7 @@ for i, amount_probs in enumerate(best_row_weight_rounded):
 
         #Set argmax indices to 1 in e_matrix
         e_matrix[i][arg_max] = 1
-#%%
-#Define y_test 
 
-#Compute accuracy of y_test and predicted matrix
-print(np.array(modelbuilder.y_test)[0], e_matrix[0])
-#%%
-print(list(modelbuilder.y_test.columns))
-#%%
-multilabel_confusion_matrix(y_true=modelbuilder.y_test, y_pred=e_matrix, labels=[0,1]).shape
-#%%
-#print(accuracy_score(y_true=modelbuilder.y_test, y_pred=e_matrix))
-#print(precision_score(y_true=modelbuilder.y_test, y_pred=e_matrix, average=None) , recall_score(y_true=modelbuilder.y_test, y_pred=e_matrix, average=None))
-print(f1_score(y_true=modelbuilder.y_test, y_pred=e_matrix, average="macro")) 
-#%%
-
-#Set these indices to 1 in empty matrix
-
-
-#Compute row accuracy and overall accuracy between y_pred and y_true 
-
-
-
-#%%
 row_weight_bce_improve = 100-((ensemble_list[0][3]/ensemble_list[0][2])*100)
 prob_matrix_bce_improve = 100-row_weight_bce_improve
 print(row_weight_bce_improve)
@@ -1077,8 +1052,6 @@ print("Perfect row weight would yield ", ensemble_list[0][3], " Which represents
 print("Worst ensemble has ", ensemble_list[-1][0], " matrices ", ensemble_list[-1][1], " weights and Binary cross-entropy of", ensemble_list[-1][2])
 print("Gain due to ensemble model: ", ensemble_list[-1][2] - ensemble_list[0][2])
 #%%
-#modelbuilder.plot_targets_to_zero(bottom_n_cols=50)
-
 #Save the type of drug target across the columns
 drug_target_counts = []
 for col in y.columns:
@@ -1087,9 +1060,7 @@ for col in y.columns:
 #Print a table of drug target types and their column counts
 print(pd.DataFrame(drug_target_counts).value_counts()[:4])
 print("Other", 205-pd.DataFrame(drug_target_counts).value_counts()[:4].sum())
-#%%
+
 #Percentage of targets to be predicted.
 print(modelbuilder.y_test.sum().sum()/(modelbuilder.y_test.shape[0]*modelbuilder.y_test.shape[1])*100)
-#modelbuilder.best_matrix_to_csv(submit_id_col=pre.X_id_submit, y_cols=pre.y_cols)
-
-# %%
+#%%
