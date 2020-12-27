@@ -12,6 +12,7 @@ import tensorflow_addons as tfa
 import seaborn as sns
 import matplotlib as m
 import matplotlib.pyplot as plt
+import matplotlib.ticker as plticker
 import sklearn as sk
 import kerastuner as kt
 
@@ -169,13 +170,13 @@ class Plotter():
         fig, axs = plt.subplots(1,1, figsize=(7,5))
         target_counts = pd.concat([pd.Series([x for x in range(8)]), label_per_row], axis=1, keys=["targets per drug", "amount of drugs"]).fillna(0)
         row_plot = sns.barplot(data= target_counts, x="targets per drug", y="amount of drugs")
-        row_plot.set_title('Amount of targets per drug admission', fontsize=18)
-        axs.set_xlabel("Targets per drug", fontsize=14)
-        axs.set_ylabel("Amount of drugs", fontsize=14)
+        row_plot.set_title('Number of drug targets across drug administrations', fontsize=17)
+        axs.set_xlabel("Number of drug targets", fontsize=14)
+        axs.set_ylabel("Number of drug administrations", fontsize=14)
 
         #Add values of bar chart on top of bars
         for index, row in target_counts.iterrows():
-            row_plot.text(row.name,row["amount of drugs"] + 40, int(row["amount of drugs"]), color='black', ha="center", fontsize=14)
+            row_plot.text(row.name,row["amount of drugs"] + 55, int(row["amount of drugs"]), color='black', ha="center", fontsize=13)
         
         #Adjust layout and save
         plt.tight_layout()
@@ -202,11 +203,12 @@ class Plotter():
         fig, axs = plt.subplots(1,1, figsize=(15,7))
 
         col_plot = sns.barplot(data=count_target_df_50, x="target name", y="target count")
-        col_plot.set_title('Top 50 targets count across all drug admissions', fontsize=18)
+   
+        col_plot.set_title('Top 50 active drug target occurances across all drug administrations', fontsize=20)
         col_plot.set_xticklabels(col_plot.get_xticklabels(), rotation=45, ha="right", rotation_mode='anchor', fontsize=12)
-        axs.set_xlabel("Target name", fontsize=14)
-        axs.set_ylabel("Target amount", fontsize=14)
-        plt.setp(axs.get_yticklabels(), fontsize=14)
+        axs.set_xlabel("Drug target names", fontsize=16)
+        axs.set_ylabel("Active drug target occurance", fontsize=16)
+        plt.setp(axs.get_yticklabels(), fontsize=16)
         count = 0
 
         #Add values of bar chart on top of bars
@@ -238,11 +240,11 @@ class Plotter():
                 else:
                     axs[i, j].hist(x=self.X.loc[:, cols[count]], bins=50, color="#3174A1")
                 
-                plt.setp(axs[i, j].get_xticklabels(), fontsize=14)
-                plt.setp(axs[i, j].get_yticklabels(), fontsize=14)
-                axs[i, j].set_xlabel(xlabel="Value", fontsize=14)
-                axs[i, j].set_ylabel(ylabel="Amount of rows", fontsize=14)
-                axs[i, j].set_title("Distribution of column " + cols[count], fontsize=18)
+                plt.setp(axs[i, j].get_xticklabels(), fontsize=16)
+                plt.setp(axs[i, j].get_yticklabels(), fontsize=16)
+                axs[i, j].set_xlabel(xlabel="Value", fontsize=16)
+                axs[i, j].set_ylabel(ylabel="Amount of rows", fontsize=16)
+                axs[i, j].set_title("Distribution of column " + cols[count], fontsize=20)
                 count += 1
 
         #Adjust format of plot and save
@@ -286,6 +288,8 @@ class Plotter():
         for g_c in ["gene", "cell"]:
             for s_k in ["skewness", "kurtosis"]:
                 
+                fig, axs = plt.subplots(1,2, figsize=(10,5))
+
                 if g_c == "gene":
                     df = self.gene_df
                     color="#3174A1"
@@ -293,23 +297,24 @@ class Plotter():
                 else: 
                     df = self.cell_df
                     color="#E1812B"
-                
-                fig, axs = plt.subplots(1,2, figsize=(10,5))
+                                
                 axs[0].hist(x=df[s_k], bins=50, color=color)
-                axs[0].set_title(g_c + " " + s_k + " values", fontsize=18)
-                axs[0].set_xlabel(s_k + " value", fontsize=14)
-                axs[0].set_ylabel("Amount of " + g_c + " columns", fontsize=14)
-                plt.setp(axs[0].get_xticklabels(), fontsize=14)
-                plt.setp(axs[0].get_yticklabels(), fontsize=14)
+                axs[0].set_title(s_k + " of " + g_c + " columns", fontsize=20)
+                axs[0].set_xlabel(s_k + " values of " + g_c + " columns", fontsize=16)
+                axs[0].set_ylabel("Number of columns per bin", fontsize=16)
+                axs[0].set_xticks(axs[0].get_xticks()[::2])
+
+                plt.setp(axs[0].get_xticklabels(), fontsize=16)
+                plt.setp(axs[0].get_yticklabels(), fontsize=16)
 
                 bar = df[s_k + " columns per group"].value_counts().reset_index()
                 bar_skew = sns.barplot(data=bar, x="index", y=s_k + " columns per group", ax=axs[1], color=color)
-                bar_skew.set_xticklabels(bar_skew.get_xticklabels(),rotation=15,ha="right",rotation_mode='anchor', fontsize=14)
-                axs[1].set_title(g_c + " " + s_k + " values", fontsize=18)
+                bar_skew.set_xticklabels(bar_skew.get_xticklabels(),rotation=15,ha="right",rotation_mode='anchor', fontsize=16)
+                axs[1].set_title(s_k + " of " + g_c + " columns", fontsize=20)
                 axs[1].set_xlabel('')
-                axs[1].set_ylabel(s_k + " columns per group", fontsize=14)
-                plt.setp(axs[1].get_xticklabels(), fontsize=14)
-                plt.setp(axs[1].get_yticklabels(), fontsize=14)
+                axs[1].set_ylabel("Number of columns per bin", fontsize=16)
+                plt.setp(axs[1].get_xticklabels(), fontsize=16)
+                plt.setp(axs[1].get_yticklabels(), fontsize=16)
                 plt.tight_layout()
                 img_path = self.plot_path + g_c + "_" + s_k + ".jpg"
                 fig.savefig(img_path)
@@ -673,8 +678,8 @@ class ModelBuilder():
         #Plot number of target columns dropped to zero, compare to bce
         fig, axs = plt.subplots(1,1, figsize=(7,5))
         drop_target_plot = sns.lineplot(x=lis_num, y=lis_val)
-        plt.xlabel('Amount of target predictions set to zero', fontsize=18)
-        plt.ylabel("Binary crossentropy value", fontsize=18)
+        plt.xlabel('Amount of target predictions set to zero', fontsize=20)
+        plt.ylabel("Binary crossentropy value", fontsize=20)
         drop_target_plot.set_title('Binary cross-entropy for least represented classes to zero probability')
         plt.tight_layout()
         fig.savefig(output_folder + "dropping_targets.jpg") 
@@ -974,6 +979,7 @@ if save_best_models == True:
 #Loads the pickled prediction matrices and row weight vectors for 5 best models
 pred_weights = pickle.load(open(output_folder + "pred_weight.pickle", 'rb'))
 pred_matrices = pickle.load(open(output_folder + "pred_matrices.pickle", 'rb'))
+
 ensemble_list = []
 print("Binary cross-entropy of amount of matrices in ensemble * amount weight vectors in ensemble")
 
